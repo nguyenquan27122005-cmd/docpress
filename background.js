@@ -25,6 +25,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     try {
       const response = await fetch(msg.url, {
         credentials: "include",
+        redirect: "error",
         signal: controller.signal,
       });
       const text = await doc2pdf.responseTextWithinLimit(

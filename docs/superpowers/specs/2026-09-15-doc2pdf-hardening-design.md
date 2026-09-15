@@ -168,7 +168,9 @@ The cookie listener removes a cookie only when all conditions hold:
 - its normalized domain is `scribd.com` or a Scribd subdomain.
 
 Cookie removal failures are caught so an unavailable cookie store cannot crash
-the service worker.
+the service worker. The request URL passed to chrome.cookies.remove uses the
+cookie's secure flag and path, and removes any leading dot from the cookie
+domain before constructing the URL.
 
 ## Failure Behavior
 

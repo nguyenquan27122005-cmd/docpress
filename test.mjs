@@ -148,6 +148,36 @@ await checkRejects(
   () => responseTextWithinLimit(new Response("abcd"), 3),
   "quá lớn"
 );
+let streamCancelled = false;
+let streamPulledAfterOverflow = false;
+let streamStarted = false;
+await checkRejects(
+  "response streaming body too large",
+  () =>
+    responseTextWithinLimit(
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("abcd"));
+          },
+          pull(controller) {
+            if (streamStarted) {
+              streamPulledAfterOverflow = true;
+              controller.close();
+            }
+            streamStarted = true;
+          },
+          cancel() {
+            streamCancelled = true;
+          },
+        })
+      ),
+      3
+    ),
+  "quá lớn"
+);
+check("response streaming cancels promptly", streamCancelled, true);
+check("response streaming avoids extra pull", streamPulledAfterOverflow, false);
 
 // parseJsonp
 check("jsonp chuẩn", parseJsonp(`pageCb_3({"html":"<div>x</div>","n":1});`), {

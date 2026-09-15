@@ -194,8 +194,30 @@ async function responseTextWithinLimit(response, maxBytes) {
   const limit = Math.max(1, Number(maxBytes) || 1);
   const declared = Number(response.headers?.get("content-length") || 0);
   if (declared > limit) throw new Error("Phản hồi quá lớn");
-  const body = await response.arrayBuffer();
-  if (body.byteLength > limit) throw new Error("Phản hồi quá lớn");
+  const reader = response.body?.getReader?.();
+  if (!reader) {
+    const body = await response.arrayBuffer();
+    if (body.byteLength > limit) throw new Error("Phản hồi quá lớn");
+    return new TextDecoder().decode(body);
+  }
+  const chunks = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value?.byteLength || 0;
+    if (size > limit) {
+      await reader.cancel();
+      throw new Error("Phản hồi quá lớn");
+    }
+    chunks.push(value);
+  }
+  const body = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
   return new TextDecoder().decode(body);
 }
 

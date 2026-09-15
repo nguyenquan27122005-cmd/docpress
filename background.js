@@ -1,37 +1,69 @@
 // Service worker: unblur cookie + proxy fetch CDN (MAIN world bị CORS).
 importScripts("lib.js");
 
-const FETCH_HOST =
-  /(^|\.)(studocu\.com|studocu\.id|studocu\.vn|studeersnel\.nl|scribd\.com|scribdassets\.com)$/;
+const MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
+const FETCH_TIMEOUT_MS = 20000;
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  if (msg?.type !== "doc2pdf-fetch" || typeof msg.url !== "string") return;
-  let host;
-  try {
-    host = new URL(msg.url).hostname;
-  } catch {
-    sendResponse({ error: "bad url" });
-    return true;
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg?.type !== "doc2pdf-fetch") return;
+  if (
+    typeof msg.url !== "string" ||
+    !doc2pdf.isAllowedFetch(sender.url, msg.url)
+  ) {
+    sendResponse({ error: "Yêu cầu tải bị chặn" });
+    return;
   }
-  if (!FETCH_HOST.test(host)) {
-    sendResponse({ error: "host" });
-    return true;
-  }
-  fetch(msg.url)
-    .then(async (r) => sendResponse({ status: r.status, text: await r.text() }))
-    .catch((e) => sendResponse({ error: String(e?.message || e) }));
+
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, FETCH_TIMEOUT_MS);
+
+  (async () => {
+    try {
+      const response = await fetch(msg.url, {
+        credentials: "include",
+        signal: controller.signal,
+      });
+      const text = await doc2pdf.responseTextWithinLimit(
+        response,
+        MAX_RESPONSE_BYTES
+      );
+      sendResponse({ status: response.status, text });
+    } catch (error) {
+      sendResponse({
+        error: timedOut
+          ? "Hết thời gian tải"
+          : String(error?.message || error || "Lỗi mạng"),
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+  })();
   return true;
 });
 
-// Xoá "sd_docs" ngay khi được ghi — cookie đếm lượt xem preview, không phải
-// cookie đăng nhập. Theo mẫu chrome-extensions-samples (Apache-2.0), cùng cách
-// studotools làm. Bỏ qua chính lúc bị xoá để không lặp vô hạn.
 chrome.cookies.onChanged.addListener((changeInfo) => {
-  if (changeInfo.cookie.name === "sd_docs" && !changeInfo.removed) {
-    chrome.cookies.remove({
-      url: doc2pdf.cookieUrl(changeInfo.cookie),
-      name: "sd_docs",
-      storeId: changeInfo.cookie.storeId,
-    });
+  const cookie = changeInfo.cookie;
+  if (
+    changeInfo.removed ||
+    cookie.name !== "sd_docs" ||
+    !doc2pdf.isScribdCookieDomain(cookie.domain)
+  ) {
+    return;
   }
+
+  chrome.storage.local.get({ unblurEnabled: true }, ({ unblurEnabled }) => {
+    if (chrome.runtime.lastError || !unblurEnabled) return;
+    chrome.cookies.remove(
+      {
+        url: doc2pdf.cookieUrl(cookie),
+        name: "sd_docs",
+        storeId: cookie.storeId,
+      },
+      () => void chrome.runtime.lastError
+    );
+  });
 });

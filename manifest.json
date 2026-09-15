@@ -2,8 +2,12 @@
   "manifest_version": 3,
   "name": "doc2pdf",
   "description": "Xuất tài liệu Studocu/Scribd ra PDF (chụp nội dung trang đang xem). Dùng cho mục đích học tập cá nhân.",
-  "version": "1.1.2",
-  "permissions": ["cookies"],
+  "version": "1.2.0",
+  "permissions": ["cookies", "storage"],
+  "action": {
+    "default_title": "doc2pdf",
+    "default_popup": "popup.html"
+  },
   "host_permissions": [
     "*://*.studocu.com/*",
     "*://*.studeersnel.nl/*",

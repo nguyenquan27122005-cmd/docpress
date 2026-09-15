@@ -31,7 +31,7 @@
         else resolve(ev.data.text ?? "");
       }
       window.addEventListener("message", onMsg);
-      window.postMessage({ type: "doc2pdf-fetch", id, url }, "*");
+      window.postMessage({ type: "doc2pdf-fetch", id, url }, location.origin);
     });
   }
 

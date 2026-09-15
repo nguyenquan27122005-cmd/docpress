@@ -22,6 +22,11 @@ const {
   mapPool,
   studocuPageMarkup,
   studocuScanHtml,
+  qualitySettings,
+  pageRange,
+  isAllowedFetch,
+  isScribdCookieDomain,
+  responseTextWithinLimit,
 } = globalThis.doc2pdf;
 
 let failed = 0;
@@ -34,6 +39,115 @@ function check(name, actual, expected) {
     console.log(`ok   ${name}`);
   }
 }
+
+async function checkRejects(name, fn, message) {
+  try {
+    await fn();
+    check(name, "resolved", "rejected");
+  } catch (error) {
+    check(name, String(error?.message || error).includes(message), true);
+  }
+}
+
+check("quality high", qualitySettings("high", 200), {
+  key: "high",
+  scale: 2,
+  jpegQuality: 0.92,
+});
+check("quality balanced", qualitySettings("balanced", 1), {
+  key: "balanced",
+  scale: 1.5,
+  jpegQuality: 0.88,
+});
+check("quality small", qualitySettings("small", 1), {
+  key: "small",
+  scale: 1,
+  jpegQuality: 0.8,
+});
+check("quality auto 40", qualitySettings("auto", 40).key, "high");
+check("quality auto 41", qualitySettings("auto", 41).key, "balanced");
+check("quality auto 100", qualitySettings("auto", 100).key, "balanced");
+check("quality auto 101", qualitySettings("auto", 101).key, "small");
+check("quality unknown -> auto", qualitySettings("wat", 10).key, "high");
+
+check("range defaults", pageRange("", "", 12), { from: 1, to: 12, count: 12 });
+check("range selected", pageRange("3", "7", 12), { from: 3, to: 7, count: 5 });
+check("range clamps end", pageRange(8, 99, 12), { from: 8, to: 12, count: 5 });
+await checkRejects("range reversed", () => pageRange(8, 3, 12), "đầu");
+await checkRejects("range fraction", () => pageRange(1.5, 3, 12), "số nguyên");
+await checkRejects("range starts past total", () => pageRange(13, "", 12), "12");
+
+check(
+  "fetch scribd asset",
+  isAllowedFetch(
+    "https://www.scribd.com/document/1/title",
+    "https://html.scribdassets.com/a/pages/1-x.jsonp"
+  ),
+  true
+);
+check(
+  "fetch studocu asset",
+  isAllowedFetch(
+    "https://www.studocu.com/en/document/x",
+    "https://cdn.studocu.com/a/1.page"
+  ),
+  true
+);
+check(
+  "fetch rejects HTTP",
+  isAllowedFetch(
+    "https://www.scribd.com/document/1/title",
+    "http://html.scribdassets.com/a"
+  ),
+  false
+);
+check(
+  "fetch rejects cross-provider",
+  isAllowedFetch(
+    "https://www.scribd.com/document/1/title",
+    "https://www.studocu.com/document/x"
+  ),
+  false
+);
+check(
+  "fetch rejects lookalike",
+  isAllowedFetch(
+    "https://www.scribd.com/document/1/title",
+    "https://scribdassets.com.evil.test/a"
+  ),
+  false
+);
+check(
+  "fetch rejects non-document sender",
+  isAllowedFetch("https://www.scribd.com/search", "https://www.scribd.com/a"),
+  false
+);
+check("fetch rejects malformed URL", isAllowedFetch("bad", "also bad"), false);
+
+check("cookie scribd root", isScribdCookieDomain("scribd.com"), true);
+check("cookie scribd dotted", isScribdCookieDomain(".www.scribd.com"), true);
+check("cookie lookalike", isScribdCookieDomain("evil-scribd.com"), false);
+check("cookie other provider", isScribdCookieDomain(".studocu.com"), false);
+
+check(
+  "response under byte limit",
+  await responseTextWithinLimit(new Response("abc"), 3),
+  "abc"
+);
+await checkRejects(
+  "response Content-Length too large",
+  () =>
+    responseTextWithinLimit(
+      new Response("abc", { headers: { "content-length": "99" } }),
+      3
+    ),
+  "quá lớn"
+);
+await checkRejects(
+  "response body too large",
+  () => responseTextWithinLimit(new Response("abcd"), 3),
+  "quá lớn"
+);
 
 // parseJsonp
 check("jsonp chuẩn", parseJsonp(`pageCb_3({"html":"<div>x</div>","n":1});`), {
@@ -93,7 +207,7 @@ check(
 check("scribd đầu vào null -> chuỗi rỗng", rewriteScribdImageHosts(null), "");
 
 // cookieUrl
-check("cookie secure", cookieUrl({ secure: true, domain: ".scribd.com", path: "/" }), "https://.scribd.com/");
+check("cookie secure", cookieUrl({ secure: true, domain: ".scribd.com", path: "/" }), "https://scribd.com/");
 check("cookie thường", cookieUrl({ secure: false, domain: "www.studocu.com", path: "/docs" }), "http://www.studocu.com/docs");
 
 // scribdPageList — Scribd lưu pages theo pageNum (1-based object), không phải Array

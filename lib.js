@@ -117,6 +117,88 @@ function isDocPath(pathname, site) {
   return false;
 }
 
+const QUALITY_PRESETS = {
+  high: { key: "high", scale: 2, jpegQuality: 0.92 },
+  balanced: { key: "balanced", scale: 1.5, jpegQuality: 0.88 },
+  small: { key: "small", scale: 1, jpegQuality: 0.8 },
+};
+
+function qualitySettings(preset, selectedPageCount) {
+  const requested = String(preset ?? "auto").toLowerCase();
+  if (QUALITY_PRESETS[requested]) return { ...QUALITY_PRESETS[requested] };
+  const count = Math.max(0, Number(selectedPageCount) || 0);
+  const key = count > 100 ? "small" : count > 40 ? "balanced" : "high";
+  return { ...QUALITY_PRESETS[key] };
+}
+
+function pageRange(fromValue, toValue, totalPages) {
+  const total = Number(totalPages);
+  if (!Number.isInteger(total) || total < 1) {
+    throw new Error("Tài liệu không có trang hợp lệ");
+  }
+  const from = fromValue === "" || fromValue == null ? 1 : Number(fromValue);
+  const requestedTo = toValue === "" || toValue == null ? total : Number(toValue);
+  if (!Number.isInteger(from) || !Number.isInteger(requestedTo)) {
+    throw new Error("Trang bắt đầu và kết thúc phải là số nguyên");
+  }
+  if (from < 1 || requestedTo < 1) {
+    throw new Error("Số trang phải từ 1 trở lên");
+  }
+  if (from > total) {
+    throw new Error("Trang bắt đầu vượt quá " + total);
+  }
+  const to = Math.min(requestedTo, total);
+  if (from > to) {
+    throw new Error("Trang bắt đầu phải nhỏ hơn hoặc bằng trang kết thúc");
+  }
+  return { from, to, count: to - from + 1 };
+}
+
+const STUDOCU_DOMAINS = ["studocu.com", "studeersnel.nl", "studocu.id", "studocu.vn"];
+
+function domainMatches(hostname, domain) {
+  const host = String(hostname ?? "").toLowerCase();
+  return host === domain || host.endsWith("." + domain);
+}
+
+function providerFamily(url, sender = false) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "https:") return null;
+  if (domainMatches(parsed.hostname, "scribd.com")) {
+    if (sender && !isDocPath(parsed.pathname, "scribd")) return null;
+    return "scribd";
+  }
+  if (!sender && domainMatches(parsed.hostname, "scribdassets.com")) return "scribd";
+  if (STUDOCU_DOMAINS.some((domain) => domainMatches(parsed.hostname, domain))) {
+    if (sender && !isDocPath(parsed.pathname, "studocu")) return null;
+    return "studocu";
+  }
+  return null;
+}
+
+function isAllowedFetch(senderUrl, requestUrl) {
+  const senderFamily = providerFamily(senderUrl, true);
+  return !!senderFamily && senderFamily === providerFamily(requestUrl, false);
+}
+
+function isScribdCookieDomain(domain) {
+  return domainMatches(String(domain ?? "").replace(/^\./, ""), "scribd.com");
+}
+
+async function responseTextWithinLimit(response, maxBytes) {
+  const limit = Math.max(1, Number(maxBytes) || 1);
+  const declared = Number(response.headers?.get("content-length") || 0);
+  if (declared > limit) throw new Error("Phản hồi quá lớn");
+  const body = await response.arrayBuffer();
+  if (body.byteLength > limit) throw new Error("Phản hồi quá lớn");
+  return new TextDecoder().decode(body);
+}
+
 function downloadFilename(title, ext = "pdf") {
   let base = String(title ?? "document")
     .replace(/\.[a-z0-9]{1,5}$/i, "")
@@ -213,7 +295,9 @@ function jpegPagesToPdf(pages) {
 // Dựng URL xoá cookie từ chính thuộc tính của cookie (background.js dùng).
 function cookieUrl(cookie) {
   const protocol = cookie.secure ? "https:" : "http:";
-  return `${protocol}//${cookie.domain}${cookie.path}`;
+  const domain = String(cookie.domain ?? "").replace(/^\./, "");
+  const path = String(cookie.path || "/");
+  return protocol + "//" + domain + path;
 }
 
 // Chạy fn trên từng phần tử, tối đa `limit` tác vụ cùng lúc, giữ thứ tự.
@@ -249,5 +333,10 @@ const doc2pdf = {
   mapPool,
   studocuPageMarkup,
   studocuScanHtml,
+  qualitySettings,
+  pageRange,
+  isAllowedFetch,
+  isScribdCookieDomain,
+  responseTextWithinLimit,
 };
 globalThis.doc2pdf = doc2pdf;

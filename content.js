@@ -561,6 +561,7 @@
 
       const controller = new AbortController();
       activeController = controller;
+      activeHost = host;
       from.disabled = true;
       to.disabled = true;
       quality.disabled = true;
@@ -588,7 +589,10 @@
         }
       } finally {
         controller.abort();
-        if (activeController === controller) activeController = null;
+        if (activeController === controller) {
+          activeController = null;
+          activeHost = null;
+        }
         from.disabled = false;
         to.disabled = false;
         quality.disabled = false;
@@ -601,15 +605,16 @@
 
   let lastHref = "";
   let activeController = null;
+  let activeHost = null;
 
   function syncWidget() {
     const host = document.getElementById(BTN_ID);
+    const supported = doc2pdf.isDocPath(location.pathname, site);
+    if (!supported || (activeController && activeHost !== host)) activeController?.abort();
     if (location.href === lastHref && host) return;
     lastHref = location.href;
-    const supported = doc2pdf.isDocPath(location.pathname, site);
     if (supported && !host && document.body) createWidget();
     if (!supported && host) {
-      activeController?.abort();
       host.remove();
     }
   }

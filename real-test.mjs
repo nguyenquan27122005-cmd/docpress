@@ -23,7 +23,7 @@ const TARGETS = [
   },
   {
     name: "studocu",
-    url: "https://www.studocu.com/en-us/document/university-of-cincinnati/ordinary-differential-equations/the-cornell-note-taking-system-with-examples/86074571",
+    url: "https://www.studocu.vn/vn/document/truong-dai-hoc-su-pham-thanh-pho-ho-chi-minh/nhap-udcntt/tai-lieu-mau-studocu-huong-dan-tai-len-va-chia-se/148501618",
   },
 ];
 const HEADED = TARGETS.some((t) => /studocu/.test(t.url));
@@ -443,6 +443,10 @@ try {
     "--window-size=1280,900",
     "--disable-blink-features=AutomationControlled",
     "--disable-extensions",
+    // Hidden headed Chrome must keep render/load timers running during CDP probes.
+    "--disable-background-timer-throttling",
+    "--disable-renderer-backgrounding",
+    "--disable-backgrounding-occluded-windows",
     "about:blank",
   ];
   chromeProc = spawn(CHROME, chromeArgs, {

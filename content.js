@@ -270,37 +270,29 @@
     }
     await waitUntil(() => !!p.innerPageElem, 8000, signal);
     throwIfAborted(signal);
-    try {
-      p.display?.();
-    } catch {}
-    throwIfAborted(signal);
-    try {
-      if (!p._imagesTurnedOn) p.turnOnImages?.();
-    } catch {}
 
     const inner = p.innerPageElem;
     if (inner) {
-      inner.querySelectorAll("img[orig]").forEach((img) => {
+      const template = document.createElement("template");
+      template.content.append((p.containerElem || inner).cloneNode(true));
+      const box = template.content.firstElementChild;
+      box.querySelectorAll("img[orig]").forEach((img) => {
         const orig = String(img.getAttribute("orig") || "").replaceAll(
           "http://html.scribd.com",
           "https://html.scribdassets.com"
         );
-        if (orig && !img.getAttribute("src")) img.setAttribute("src", orig);
+        const src = String(img.getAttribute("src") || "");
+        if (orig && !/^(data|blob):/i.test(src)) img.setAttribute("src", orig);
+        img.removeAttribute("orig");
         img.style.display = "block";
       });
-      await waitUntil(
-        () => [...inner.querySelectorAll("img")].every((img) => img.complete),
-        400,
-        signal
-      );
       throwIfAborted(signal);
       if (p.containerElem) {
-        const box = p.containerElem.cloneNode(true);
         if (p.origWidth) box.style.width = `${p.origWidth}px`;
         if (p.origHeight) box.style.height = `${p.origHeight}px`;
         return doc2pdf.rewriteScribdImageHosts(box.outerHTML);
       }
-      return doc2pdf.rewriteScribdImageHosts(inner.innerHTML);
+      return doc2pdf.rewriteScribdImageHosts(box.innerHTML);
     }
 
     throwIfAborted(signal);

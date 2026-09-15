@@ -178,6 +178,31 @@ await checkRejects(
 );
 check("response streaming cancels promptly", streamCancelled, true);
 check("response streaming avoids extra pull", streamPulledAfterOverflow, false);
+let stalledCancel = false;
+const stalledResponse = new Response(
+  new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode("abcd"));
+    },
+    cancel() {
+      stalledCancel = true;
+      return new Promise(() => {});
+    },
+  })
+);
+const stalledResult = await Promise.race([
+  responseTextWithinLimit(stalledResponse, 3).then(
+    () => "resolved",
+    (error) => error
+  ),
+  new Promise((resolve) => setTimeout(() => resolve("timeout"), 50)),
+]);
+check(
+  "response stalled cancel still rejects promptly",
+  stalledResult instanceof Error && String(stalledResult.message).includes("quá lớn"),
+  true
+);
+check("response stalled cancel invoked", stalledCancel, true);
 
 // parseJsonp
 check("jsonp chuẩn", parseJsonp(`pageCb_3({"html":"<div>x</div>","n":1});`), {

@@ -207,7 +207,11 @@ async function responseTextWithinLimit(response, maxBytes) {
     if (done) break;
     size += value?.byteLength || 0;
     if (size > limit) {
-      await reader.cancel();
+      try {
+        Promise.resolve(reader.cancel()).catch(() => {});
+      } catch {
+        // Cancellation is best effort; the size-limit error takes precedence.
+      }
       throw new Error("Phản hồi quá lớn");
     }
     chunks.push(value);

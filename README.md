@@ -54,5 +54,5 @@ Selector và pattern nằm trong `lib.js` (URL trang, JSONP) và đầu `content
 - Mở một tài liệu từ trang tìm kiếm bằng SPA; panel phải xuất hiện, rồi biến mất khi rời tài liệu.
 - Xuất 2 trang ở Auto; PDF phải có đúng 2 trang và mở được.
 - Bấm Hủy khi đang chụp; không được tải file một phần.
-- Tắt unblur, tạo `sd_docs` và xác nhận cookie còn; bật lại và xác nhận cookie bị xóa.
+- Tắt unblur, tạo `sd_docs` và xác nhận cookie còn; bật lại, tạo lại hoặc cập nhật `sd_docs`, rồi xác nhận cookie bị xóa.
 - Thử một tài liệu cần bridge fallback và xác nhận vẫn tải được nội dung cùng provider.

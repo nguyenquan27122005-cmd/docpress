@@ -32,7 +32,14 @@
         () => finish(reject, new Error("bridge timeout")),
         20000
       );
-      const onAbort = () => finish(reject, abortError());
+      let cancelSent = false;
+      const onAbort = () => {
+        if (!cancelSent) {
+          cancelSent = true;
+          window.postMessage({ type: "doc2pdf-fetch-cancel", id }, location.origin);
+        }
+        finish(reject, abortError());
+      };
       function cleanup() {
         clearTimeout(timer);
         window.removeEventListener("message", onMessage);
@@ -132,6 +139,27 @@
         resolve();
       }
       signal?.addEventListener("abort", onAbort, { once: true });
+    });
+  }
+
+  function waitForFonts(signal) {
+    return new Promise((resolve, reject) => {
+      throwIfAborted(signal);
+      let settled = false;
+      const timer = setTimeout(() => finish(resolve), 5000);
+      const onAbort = () => finish(reject, abortError());
+      function finish(fn, value) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+        fn(value);
+      }
+      signal?.addEventListener("abort", onAbort, { once: true });
+      Promise.resolve(document.fonts?.ready).then(
+        () => finish(resolve),
+        () => finish(resolve)
+      );
     });
   }
 
@@ -335,7 +363,7 @@
     });
   }
 
-  function assignImageUrl(img, url, signal) {
+  function waitForImage(img, signal) {
     return new Promise((resolve, reject) => {
       throwIfAborted(signal);
       let settled = false;
@@ -362,9 +390,49 @@
       };
       img.onerror = () => finish(reject, new Error("Không đọc được ảnh"));
       signal?.addEventListener("abort", onAbort, { once: true });
-      img.src = url;
       if (img.complete) img.onload();
     });
+  }
+
+  function parseSrcset(value) {
+    const input = String(value || "");
+    const candidates = [];
+    let index = 0;
+    while (index < input.length) {
+      while (index < input.length && /[\s,]/.test(input[index])) index++;
+      if (index >= input.length) break;
+      const start = index;
+      while (index < input.length && !/\s/.test(input[index])) index++;
+      let url = input.slice(start, index);
+      if (url.endsWith(",")) {
+        url = url.replace(/,+$/, "");
+        if (url) candidates.push({ url, descriptor: "" });
+        continue;
+      }
+      while (index < input.length && /\s/.test(input[index])) index++;
+      const descriptorStart = index;
+      let parentheses = 0;
+      while (index < input.length) {
+        if (input[index] === "(") parentheses++;
+        if (input[index] === ")") parentheses = Math.max(0, parentheses - 1);
+        if (input[index] === "," && parentheses === 0) break;
+        index++;
+      }
+      const descriptor = input.slice(descriptorStart, index).trim();
+      if (index < input.length) index++;
+      if (url) candidates.push({ url, descriptor });
+    }
+    return candidates;
+  }
+
+  function remoteImageUrl(value) {
+    const url = String(value || "").trim();
+    if (!url || /^(data|blob):/i.test(url)) return "";
+    try {
+      return new URL(url, location.href).href;
+    } catch {
+      return url;
+    }
   }
 
   async function inlineImages(root, signal) {
@@ -374,26 +442,44 @@
       for (const url of urls.splice(0)) URL.revokeObjectURL(url);
     };
     try {
-      await doc2pdf.mapPool([...root.querySelectorAll("img")], 4, async (img) => {
+      const attributes = [];
+      for (const element of root.querySelectorAll("img, picture source")) {
+        for (const name of ["src", "srcset"]) {
+          if (!element.hasAttribute(name)) continue;
+          const value = element.getAttribute(name) || "";
+          attributes.push({
+            element,
+            name,
+            candidates: name === "srcset" ? parseSrcset(value) : [{ url: value, descriptor: "" }],
+          });
+        }
+      }
+      const sources = [...new Set(attributes.flatMap(({ candidates }) =>
+        candidates.map(({ url }) => remoteImageUrl(url)).filter(Boolean)
+      ))];
+      const replacements = new Map();
+      await doc2pdf.mapPool(sources, 4, async (src) => {
         if (failure) return;
-        const src = img.currentSrc || img.getAttribute("src") || "";
-        if (!src) return;
         try {
           throwIfAborted(signal);
-          let url = src;
-          if (!src.startsWith("data:") && !src.startsWith("blob:")) {
-            const blob = await xhrBlob(src, signal);
-            throwIfAborted(signal);
-            url = URL.createObjectURL(blob);
-            urls.push(url);
-          }
-          await assignImageUrl(img, url, signal);
+          const blob = await xhrBlob(src, signal);
+          throwIfAborted(signal);
+          const url = URL.createObjectURL(blob);
+          urls.push(url);
+          replacements.set(src, url);
         } catch (error) {
           failure ||= error;
         }
       });
       throwIfAborted(signal);
       if (failure) throw failure;
+      for (const { element, name, candidates } of attributes) {
+        const value = candidates.map(({ url, descriptor }) => {
+          const replacement = replacements.get(remoteImageUrl(url)) || url;
+          return descriptor ? replacement + " " + descriptor : replacement;
+        }).join(", ");
+        element.setAttribute(name, value);
+      }
       return cleanup;
     } catch (error) {
       cleanup();
@@ -401,7 +487,24 @@
     }
   }
 
-  async function exportDocument({ from, to, preset, signal, setStatus }) {
+  async function waitForImages(root, signal) {
+    let failure;
+    await doc2pdf.mapPool([...root.querySelectorAll("img")], 4, async (img) => {
+      if (failure) return;
+      const hasSource = img.currentSrc || img.getAttribute("src") ||
+        img.closest("picture")?.querySelector("source[src], source[srcset]");
+      if (!hasSource) return;
+      try {
+        await waitForImage(img, signal);
+      } catch (error) {
+        failure ||= error;
+      }
+    });
+    throwIfAborted(signal);
+    if (failure) throw failure;
+  }
+
+  async function exportDocument({ from, to, preset, signal, setStatus, title }) {
     setStatus("Đang đọc tài liệu…");
     const data =
       site === "scribd"
@@ -432,15 +535,18 @@
           "px;height:" +
           height +
           "px;";
-        pageBox.innerHTML = page.html;
-        stage.replaceChildren(pageBox);
+        const pageTemplate = document.createElement("template");
+        pageTemplate.innerHTML = page.html;
 
         let releaseImages = () => {};
         let canvas;
         try {
           setStatus("Đang tải ảnh trang " + (index + 1) + "/" + data.pages.length + "…");
-          releaseImages = await inlineImages(pageBox, signal);
-          await document.fonts.ready.catch(() => {});
+          releaseImages = await inlineImages(pageTemplate.content, signal);
+          pageBox.append(pageTemplate.content);
+          stage.replaceChildren(pageBox);
+          await waitForImages(pageBox, signal);
+          await waitForFonts(signal);
           throwIfAborted(signal);
           setStatus("Đang chụp trang " + (index + 1) + "/" + data.pages.length + "…");
           canvas = await html2canvas(pageBox, {
@@ -499,7 +605,7 @@
       if (!pdf) throw new Error("Không ghép được PDF");
       triggerChromeDownload(
         new Blob([pdf], { type: "application/pdf" }),
-        doc2pdf.downloadFilename(document.title || "document", "pdf")
+        doc2pdf.downloadFilename(title, "pdf")
       );
     } finally {
       stage.remove();
@@ -560,8 +666,10 @@
       }
 
       const controller = new AbortController();
+      const title = document.title || "document";
       activeController = controller;
       activeHost = host;
+      activeDocument = location.origin + location.pathname;
       from.disabled = true;
       to.disabled = true;
       quality.disabled = true;
@@ -576,6 +684,7 @@
           preset: quality.value,
           signal: controller.signal,
           setStatus,
+          title,
         });
         setStatus("Đã tải PDF");
       } catch (error) {
@@ -592,6 +701,7 @@
         if (activeController === controller) {
           activeController = null;
           activeHost = null;
+          activeDocument = "";
         }
         from.disabled = false;
         to.disabled = false;
@@ -606,11 +716,20 @@
   let lastHref = "";
   let activeController = null;
   let activeHost = null;
+  let activeDocument = "";
 
   function syncWidget() {
     const host = document.getElementById(BTN_ID);
     const supported = doc2pdf.isDocPath(location.pathname, site);
-    if (!supported || (activeController && activeHost !== host)) activeController?.abort();
+    if (
+      !supported ||
+      (activeController && (
+        activeHost !== host ||
+        activeDocument !== location.origin + location.pathname
+      ))
+    ) {
+      activeController?.abort();
+    }
     if (location.href === lastHref && host) return;
     lastHref = location.href;
     if (supported && !host && document.body) createWidget();

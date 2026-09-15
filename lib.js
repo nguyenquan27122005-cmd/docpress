@@ -193,7 +193,14 @@ function isScribdCookieDomain(domain) {
 async function responseTextWithinLimit(response, maxBytes) {
   const limit = Math.max(1, Number(maxBytes) || 1);
   const declared = Number(response.headers?.get("content-length") || 0);
-  if (declared > limit) throw new Error("Phản hồi quá lớn");
+  if (declared > limit) {
+    try {
+      Promise.resolve(response.body?.cancel()).catch(() => {});
+    } catch {
+      // Cancellation is best effort; the size-limit error takes precedence.
+    }
+    throw new Error("Phản hồi quá lớn");
+  }
   const reader = response.body?.getReader?.();
   if (!reader) {
     const body = await response.arrayBuffer();

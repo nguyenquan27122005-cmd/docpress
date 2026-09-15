@@ -3,10 +3,32 @@ importScripts("lib.js");
 
 const MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 20000;
+const activeRequests = new Map();
+
+function requestKey(sender, id) {
+  const tabId = sender.tab?.id;
+  const frameId = sender.frameId;
+  const documentId = sender.documentId;
+  if (
+    !Number.isSafeInteger(id) || id < 1 ||
+    !Number.isSafeInteger(tabId) || tabId < 0 ||
+    !Number.isSafeInteger(frameId) || frameId < 0 ||
+    typeof documentId !== "string" || !documentId
+  ) {
+    return "";
+  }
+  return tabId + ":" + frameId + ":" + documentId + ":" + id;
+}
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  const key = requestKey(sender, msg?.id);
+  if (msg?.type === "doc2pdf-fetch-cancel") {
+    if (key) activeRequests.get(key)?.abort();
+    return;
+  }
   if (msg?.type !== "doc2pdf-fetch") return;
   if (
+    !key || activeRequests.has(key) ||
     typeof msg.url !== "string" ||
     !doc2pdf.isAllowedFetch(sender.url, msg.url)
   ) {
@@ -15,6 +37,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   const controller = new AbortController();
+  activeRequests.set(key, controller);
   let timedOut = false;
   const timer = setTimeout(() => {
     timedOut = true;
@@ -40,6 +63,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           : String(error?.message || error || "Lỗi mạng"),
       });
     } finally {
+      if (activeRequests.get(key) === controller) activeRequests.delete(key);
+      controller.abort();
       clearTimeout(timer);
     }
   })();

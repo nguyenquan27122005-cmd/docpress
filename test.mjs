@@ -3,6 +3,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { runInNewContext } from "node:vm";
 
 const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "lib.js"), "utf8");
 new Function(src)(); // gắn globalThis.doc2pdf
@@ -203,6 +204,130 @@ check(
   true
 );
 check("response stalled cancel invoked", stalledCancel, true);
+
+for (const mode of ["resolved", "stalled", "rejected", "throws"]) {
+  let cancelled = false;
+  const response = new Response(new ReadableStream({
+    cancel() {
+      cancelled = true;
+      if (mode === "stalled") return new Promise(() => {});
+      if (mode === "rejected") return Promise.reject(new Error("cancel failed"));
+      if (mode === "throws") throw new Error("cancel threw");
+    },
+  }), { headers: { "content-length": "99" } });
+  const result = await Promise.race([
+    responseTextWithinLimit(response, 3).then(() => "resolved", (error) => error.message),
+    new Promise((resolve) => setTimeout(() => resolve("timeout"), 50)),
+  ]);
+  check("declared overflow rejects promptly when cancel " + mode, result, "Phản hồi quá lớn");
+  check("declared overflow cancels body when cancel " + mode, cancelled, true);
+}
+
+// Run the real worker against controlled network and Chrome boundaries.
+function backgroundFixture(fetchResponse) {
+  let listener;
+  let sequence = 0;
+  const timers = new Map();
+  const requests = [];
+  const cleanupAborted = [];
+  runInNewContext(readFileSync(new URL("background.js", import.meta.url), "utf8"), {
+    importScripts() {}, doc2pdf: globalThis.doc2pdf, AbortController,
+    fetch(url, options) {
+      requests.push({ url, ...options });
+      return fetchResponse(url, options);
+    },
+    setTimeout(fn, ms) { const id = ++sequence; timers.set(id, { fn, ms }); return id; },
+    clearTimeout(id) {
+      cleanupAborted.push(requests[id - 1]?.signal.aborted);
+      timers.delete(id);
+    },
+    chrome: {
+      runtime: { onMessage: { addListener(fn) { listener = fn; } } },
+      cookies: { onChanged: { addListener() {} } },
+    },
+  });
+  return {
+    timers, requests, cleanupAborted,
+    message(msg, sender, respond = () => {}) { return listener(msg, sender, respond); },
+    request(msg, sender) { return new Promise((resolve) => listener(msg, sender, resolve)); },
+  };
+}
+const senderA = {
+  url: "https://www.scribd.com/document/1/title",
+  tab: { id: 7 }, frameId: 0, documentId: "document-a",
+};
+const senderB = {
+  url: "https://www.scribd.com/document/1/title",
+  tab: { id: 8 }, frameId: 0, documentId: "document-b",
+};
+const fetchMessage = { type: "doc2pdf-fetch", id: 1, url: "https://html.scribdassets.com/page" };
+const oversizedWorker = backgroundFixture(async () => new Response(new ReadableStream({
+  cancel() { return new Promise(() => {}); },
+}), { headers: { "content-length": "5242881" } }));
+check("worker returns declared size error", await oversizedWorker.request(fetchMessage, senderA), { error: "Phản hồi quá lớn" });
+check("worker aborts oversized fetch before clearing timeout", oversizedWorker.cleanupAborted, [true]);
+check("worker clears oversized fetch timeout", oversizedWorker.timers.size, 0);
+
+function bridgeFixture() {
+  let listener;
+  const runtimeMessages = [];
+  const pageMessages = [];
+  const fixtureWindow = {
+    addEventListener(type, fn) { if (type === "message") listener = fn; },
+    postMessage(data, targetOrigin) { pageMessages.push({ data, targetOrigin }); },
+  };
+  const runtime = {
+    lastError: null,
+    sendMessage(message, callback) {
+      runtimeMessages.push(message);
+      callback?.({ status: 200, text: "ok" });
+    },
+  };
+  runInNewContext(readFileSync(new URL("bridge.js", import.meta.url), "utf8"), {
+    window: fixtureWindow,
+    location: { origin: "https://www.scribd.com" },
+    chrome: { runtime },
+  });
+  return {
+    runtimeMessages,
+    pageMessages,
+    dispatch(data, source = fixtureWindow) { listener({ source, data }); },
+  };
+}
+
+const bridge = bridgeFixture();
+bridge.dispatch({ type: "doc2pdf-fetch", id: 7, url: "https://html.scribdassets.com/page" });
+bridge.dispatch({ type: "doc2pdf-fetch-cancel", id: 7 });
+bridge.dispatch({ type: "doc2pdf-fetch-cancel", id: 0 });
+bridge.dispatch({ type: "doc2pdf-fetch-cancel", id: Number.MAX_SAFE_INTEGER + 1 });
+bridge.dispatch({ type: "doc2pdf-fetch-cancel", id: 8 }, {});
+check("bridge preserves correlated fetch and cancel IDs", bridge.runtimeMessages, [
+  { type: "doc2pdf-fetch", id: 7, url: "https://html.scribdassets.com/page" },
+  { type: "doc2pdf-fetch-cancel", id: 7 },
+]);
+check("bridge targets successful fetch result to page origin", bridge.pageMessages, [{
+  data: { type: "doc2pdf-fetch-result", id: 7, status: 200, text: "ok" },
+  targetOrigin: "https://www.scribd.com",
+}]);
+
+const cancellableWorker = backgroundFixture((url, options) => new Promise((resolve, reject) => {
+  options.signal.addEventListener("abort", () => reject(new DOMException("cancelled", "AbortError")), { once: true });
+}));
+const responseA = new Promise((resolve) => cancellableWorker.message({ ...fetchMessage, id: 12 }, senderA, resolve));
+const responseB = new Promise((resolve) => cancellableWorker.message({ ...fetchMessage, id: 12 }, senderB, resolve));
+await Promise.resolve();
+cancellableWorker.message({ type: "doc2pdf-fetch-cancel", id: 12 }, senderA);
+await Promise.resolve();
+check("matching sender cancellation aborts its request", cancellableWorker.requests[0].signal.aborted, true);
+check("matching sender cancellation leaves other sender active", cancellableWorker.requests[1].signal.aborted, false);
+cancellableWorker.message({ type: "doc2pdf-fetch-cancel", id: 12 }, senderB);
+await Promise.all([responseA, responseB]);
+check("second sender cancellation aborts its own request", cancellableWorker.requests[1].signal.aborted, true);
+
+const reusableWorker = backgroundFixture(async () => new Response("ok"));
+check("worker rejects invalid request ID", await reusableWorker.request({ ...fetchMessage, id: 0 }, senderA), { error: "Yêu cầu tải bị chặn" });
+check("worker accepts request ID after terminal cleanup", await reusableWorker.request({ ...fetchMessage, id: 13 }, senderA), { status: 200, text: "ok" });
+check("worker reuses request ID after terminal cleanup", await reusableWorker.request({ ...fetchMessage, id: 13 }, senderA), { status: 200, text: "ok" });
 
 // parseJsonp
 check("jsonp chuẩn", parseJsonp(`pageCb_3({"html":"<div>x</div>","n":1});`), {

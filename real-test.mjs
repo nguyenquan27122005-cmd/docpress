@@ -195,6 +195,18 @@ async function testUrl(browserWs, target, startId) {
     ws,
     `(async () => {
       const pp = window.__NEXT_DATA__?.props?.pageProps;
+      const widgetHost = document.getElementById("doc2pdf-btn");
+      const widgetRoot = widgetHost?.shadowRoot;
+      const widget = {
+        exists: !!widgetHost,
+        hasRange:
+          !!widgetRoot?.getElementById("doc2pdf-from") &&
+          !!widgetRoot?.getElementById("doc2pdf-to"),
+        qualityOptions:
+          widgetRoot?.getElementById("doc2pdf-quality")?.options.length || 0,
+        hasStart: !!widgetRoot?.getElementById("doc2pdf-start"),
+        hasStatus: !!widgetRoot?.getElementById("doc2pdf-status"),
+      };
       const access = pp?.documentAccess;
       const nextList = pp?.pageDataList;
       if (access?.url && Array.isArray(nextList) && nextList.length) {
@@ -233,7 +245,7 @@ async function testUrl(browserWs, target, startId) {
           sample: extracted.slice(0, 3),
           htmlUrls: [],
           firstVisible: null,
-          btn: !!document.getElementById("doc2pdf-btn"),
+          widget,
           html2canvas: typeof html2canvas,
         };
       }
@@ -319,7 +331,6 @@ async function testUrl(browserWs, target, startId) {
         }
       }
 
-      const btn = !!document.getElementById("doc2pdf-btn");
       const leftoverOrig = pages[0]?.innerPageElem
         ? [...pages[0].innerPageElem.querySelectorAll("img[orig]")].map((img) => ({
             orig: String(img.getAttribute("orig") || "").slice(0, 80),
@@ -338,7 +349,7 @@ async function testUrl(browserWs, target, startId) {
         extracted,
         leftoverOrig,
         xhr1,
-        btn,
+        widget,
         html2canvas: typeof html2canvas,
       };
     })()`,
@@ -469,7 +480,18 @@ try {
         Array.isArray(result.extracted) &&
         result.extracted.length > 0 &&
         result.extracted.every((p) => p.htmlLen > 80);
-      const ok = result.pageCount > 0 && result.source !== "none" && extractedOk && result.btn;
+      const widgetOk =
+        result.widget?.exists &&
+        result.widget.hasRange &&
+        result.widget.qualityOptions === 4 &&
+        result.widget.hasStart &&
+        result.widget.hasStatus;
+      const ok =
+        result.pageCount > 0 &&
+        result.source !== "none" &&
+        extractedOk &&
+        widgetOk &&
+        pdfProbe?.ok === true;
       if (!ok) {
         failed++;
         console.error(`FAIL ${target.name}`);

@@ -12,113 +12,240 @@
       : null;
   if (!globalThis.doc2pdf) return;
   // Studocu: /document/. Scribd: /doc|/document|/presentation (studotools) + /embeds.
-  if (!site || !doc2pdf.isDocPath(location.pathname, site)) return;
+  if (!site) return;
 
   let fetchSeq = 0;
-  function fetchViaBridge(url) {
+  function abortError() {
+    return new DOMException("Đã hủy", "AbortError");
+  }
+
+  function throwIfAborted(signal) {
+    if (signal?.aborted) throw abortError();
+  }
+
+  function fetchViaBridge(url, signal) {
     const id = ++fetchSeq;
     return new Promise((resolve, reject) => {
-      const t = setTimeout(() => {
-        window.removeEventListener("message", onMsg);
-        reject(new Error("bridge timeout"));
-      }, 20000);
-      function onMsg(ev) {
-        if (ev.source !== window || ev.data?.type !== "doc2pdf-fetch-result" || ev.data.id !== id) return;
-        clearTimeout(t);
-        window.removeEventListener("message", onMsg);
-        if (ev.data.error) reject(new Error(ev.data.error));
-        else if (ev.data.status && ev.data.status >= 400) reject(new Error(`HTTP ${ev.data.status}`));
-        else resolve(ev.data.text ?? "");
+      throwIfAborted(signal);
+      let settled = false;
+      const timer = setTimeout(
+        () => finish(reject, new Error("bridge timeout")),
+        20000
+      );
+      const onAbort = () => finish(reject, abortError());
+      function cleanup() {
+        clearTimeout(timer);
+        window.removeEventListener("message", onMessage);
+        signal?.removeEventListener("abort", onAbort);
       }
-      window.addEventListener("message", onMsg);
+      function finish(fn, value) {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        fn(value);
+      }
+      function onMessage(event) {
+        if (
+          event.source !== window ||
+          event.data?.type !== "doc2pdf-fetch-result" ||
+          event.data.id !== id
+        ) {
+          return;
+        }
+        if (event.data.error) finish(reject, new Error(event.data.error));
+        else if (event.data.status >= 400) {
+          finish(reject, new Error("HTTP " + event.data.status));
+        } else {
+          finish(resolve, event.data.text ?? "");
+        }
+      }
+      window.addEventListener("message", onMessage);
+      signal?.addEventListener("abort", onAbort, { once: true });
       window.postMessage({ type: "doc2pdf-fetch", id, url }, location.origin);
     });
   }
 
-  async function fetchText(url) {
+  function xhrText(url, signal) {
+    return new Promise((resolve, reject) => {
+      throwIfAborted(signal);
+      const xhr = new XMLHttpRequest();
+      const onAbort = () => {
+        cleanup();
+        xhr.abort();
+        reject(abortError());
+      };
+      const cleanup = () => signal?.removeEventListener("abort", onAbort);
+      xhr.open("GET", url);
+      xhr.withCredentials = true;
+      xhr.timeout = 15000;
+      xhr.onload = () => {
+        cleanup();
+        if (xhr.status >= 200 && xhr.status < 300) resolve(xhr.responseText);
+        else reject(new Error("HTTP " + xhr.status + " khi tải trang"));
+      };
+      xhr.onerror = () => {
+        cleanup();
+        reject(new Error("Không tải được trang"));
+      };
+      xhr.ontimeout = () => {
+        cleanup();
+        reject(new Error("timeout khi tải trang"));
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+      xhr.send();
+    });
+  }
+
+  async function fetchText(url, signal) {
+    throwIfAborted(signal);
     try {
-      const r = await fetch(url, { credentials: "include" });
-      if (!r.ok) throw new Error(`HTTP ${r.status} khi tải trang`);
-      return await r.text();
-    } catch (fetchErr) {
+      const response = await fetch(url, {
+        credentials: "include",
+        signal,
+      });
+      if (!response.ok) {
+        throw new Error("HTTP " + response.status + " khi tải trang");
+      }
+      return await response.text();
+    } catch (fetchError) {
+      if (signal?.aborted) throw abortError();
       try {
-        return await new Promise((resolve, reject) => {
-          const x = new XMLHttpRequest();
-          x.open("GET", url);
-          x.withCredentials = true;
-          x.timeout = 15000;
-          x.onload = () =>
-            x.status >= 200 && x.status < 300
-              ? resolve(x.responseText)
-              : reject(new Error(`HTTP ${x.status} khi tải trang`));
-          x.onerror = () => reject(fetchErr);
-          x.ontimeout = () => reject(new Error("timeout khi tải trang"));
-          x.send();
-        });
+        return await xhrText(url, signal);
       } catch {
-        return await fetchViaBridge(url);
+        if (signal?.aborted) throw abortError();
+        return await fetchViaBridge(url, signal);
       }
     }
   }
 
-  function waitMs(ms) {
-    return new Promise((r) => setTimeout(r, ms));
+  function waitMs(ms, signal) {
+    return new Promise((resolve, reject) => {
+      throwIfAborted(signal);
+      const timer = setTimeout(done, ms);
+      const onAbort = () => {
+        clearTimeout(timer);
+        signal.removeEventListener("abort", onAbort);
+        reject(abortError());
+      };
+      function done() {
+        signal?.removeEventListener("abort", onAbort);
+        resolve();
+      }
+      signal?.addEventListener("abort", onAbort, { once: true });
+    });
   }
 
-  async function waitUntil(pred, ms) {
+  async function waitUntil(predicate, ms, signal) {
     const deadline = Date.now() + ms;
     while (Date.now() < deadline) {
-      if (pred()) return true;
-      await waitMs(50);
+      throwIfAborted(signal);
+      if (predicate()) return true;
+      await waitMs(50, signal);
     }
-    return !!pred();
+    throwIfAborted(signal);
+    return !!predicate();
   }
 
-  async function extractStudocu(setStatus) {
-    const pp = window.__NEXT_DATA__?.props?.pageProps;
-    const access = pp?.documentAccess;
-    const list = pp?.pageDataList;
-    if (!access?.url || !access?.objectKey || !Array.isArray(list) || list.length === 0) {
-      throw new Error("Không đọc được dữ liệu tài liệu Studocu (__NEXT_DATA__)");
+  async function extractStudocu({ from, to, signal, setStatus }) {
+    const pageProps = window.__NEXT_DATA__?.props?.pageProps;
+    const access = pageProps?.documentAccess;
+    const list = pageProps?.pageDataList;
+    if (
+      !access?.url ||
+      !access?.objectKey ||
+      !Array.isArray(list) ||
+      list.length === 0
+    ) {
+      throw new Error(
+        "Không đọc được dữ liệu tài liệu Studocu (__NEXT_DATA__)"
+      );
     }
+    const range = doc2pdf.pageRange(from, to, list.length);
+    const selected = list.slice(range.from - 1, range.to);
     let done = 0;
-    const pages = await doc2pdf.mapPool(list, 4, async (p, i) => {
-      const row = p ?? {};
-      const num = row.pageNumber ?? i + 1;
+    const pages = await doc2pdf.mapPool(selected, 4, async (item, index) => {
+      throwIfAborted(signal);
+      const row = item ?? {};
+      const pageNumber = row.pageNumber ?? range.from + index;
       let inner =
         (typeof row.pageHtml === "string" && row.pageHtml) ||
         (typeof row.html === "string" && row.html) ||
         null;
       if (!inner) {
         try {
-          inner = await fetchText(doc2pdf.studocuPageUrl(access, num));
-        } catch {
-          inner = doc2pdf.studocuScanHtml(access, num);
+          inner = await fetchText(
+            doc2pdf.studocuPageUrl(access, pageNumber),
+            signal
+          );
+        } catch (error) {
+          if (error?.name === "AbortError") throw error;
+          inner = doc2pdf.studocuScanHtml(access, pageNumber);
         }
-        inner = inner.replaceAll(`bg${num.toString(16)}.png`, doc2pdf.studocuBgUrl(access, num));
+        inner = String(inner || "").replaceAll(
+          "bg" + pageNumber.toString(16) + ".png",
+          doc2pdf.studocuBgUrl(access, pageNumber)
+        );
       }
       done++;
-      setStatus(`Đang lấy trang ${done}/${list.length}…`);
-      return { html: doc2pdf.studocuPageMarkup(row, inner), width: row.width, height: row.height };
+      setStatus("Đang lấy trang " + done + "/" + selected.length + "…");
+      return {
+        html: doc2pdf.studocuPageMarkup(row, inner),
+        width: row.width,
+        height: row.height,
+        pageNumber,
+      };
     });
-    const firstImg = document.querySelector("div[data-page-index='0'] .page-content img.bi");
-    return {
-      pages,
-      width: list[0]?.width ?? firstImg?.naturalWidth,
-      height: list[0]?.height ?? firstImg?.naturalHeight,
-    };
+    return { pages, range, total: list.length };
   }
 
-  async function htmlFromScribdPage(p) {
+  async function extractScribd({ from, to, signal, setStatus }) {
+    let list = doc2pdf.scribdPageList(window.docManager);
+    const deadline = Date.now() + 8000;
+    while (list.length === 0 && Date.now() < deadline) {
+      await waitMs(150, signal);
+      list = doc2pdf.scribdPageList(window.docManager);
+    }
+    if (list.length === 0) {
+      list = doc2pdf.scribdPagesFromHtml(document.documentElement.innerHTML);
+    }
+    if (list.length === 0) {
+      throw new Error("Không đọc được docManager của Scribd");
+    }
+    const range = doc2pdf.pageRange(from, to, list.length);
+    const selected = list.slice(range.from - 1, range.to);
+    let done = 0;
+    const pages = await doc2pdf.mapPool(selected, 4, async (page, index) => {
+      throwIfAborted(signal);
+      const pageNumber = page.pageNum ?? range.from + index;
+      const html = await htmlFromScribdPage(page, signal);
+      if (!html) {
+        throw new Error("Scribd không trả nội dung trang " + pageNumber);
+      }
+      done++;
+      setStatus("Đang lấy trang " + done + "/" + selected.length + "…");
+      return {
+        html,
+        width: page.origWidth,
+        height: page.origHeight,
+        pageNumber,
+      };
+    });
+    return { pages, range, total: list.length };
+  }
+
+  async function htmlFromScribdPage(p, signal) {
+    throwIfAborted(signal);
     if (typeof p.load === "function" && !p.innerPageElem && !p.loadHasStarted) {
       try {
         p.load();
       } catch {}
     }
-    await waitUntil(() => !!p.innerPageElem, 8000);
+    await waitUntil(() => !!p.innerPageElem, 8000, signal);
+    throwIfAborted(signal);
     try {
       p.display?.();
     } catch {}
+    throwIfAborted(signal);
     try {
       if (!p._imagesTurnedOn) p.turnOnImages?.();
     } catch {}
@@ -135,8 +262,10 @@
       });
       await waitUntil(
         () => [...inner.querySelectorAll("img")].every((img) => img.complete),
-        400
+        400,
+        signal
       );
+      throwIfAborted(signal);
       if (p.containerElem) {
         const box = p.containerElem.cloneNode(true);
         if (p.origWidth) box.style.width = `${p.origWidth}px`;
@@ -146,8 +275,9 @@
       return doc2pdf.rewriteScribdImageHosts(inner.innerHTML);
     }
 
+    throwIfAborted(signal);
     if (!p.contentUrl) return "";
-    const raw = await fetchText(p.contentUrl);
+    const raw = await fetchText(p.contentUrl, signal);
     let html = doc2pdf.rewriteScribdImageHosts(doc2pdf.scribdPageHtml(doc2pdf.parseJsonp(raw), raw));
     if (p.containerElem) {
       const box = p.containerElem.cloneNode();
@@ -156,45 +286,8 @@
       if (p.origHeight) box.style.height = `${p.origHeight}px`;
       html = box.outerHTML;
     }
+    throwIfAborted(signal);
     return html;
-  }
-
-  async function extractScribd(setStatus) {
-    // Live Scribd: pages là object 1-based, không phải Array. contentUrl bị xóa
-    // sau khi load; fetch jsonp bị webpack bọc. Ưu tiên load()+DOM, jsonp là fallback.
-    let list = doc2pdf.scribdPageList(window.docManager);
-    const deadline = Date.now() + 8000;
-    while (list.length === 0 && Date.now() < deadline) {
-      await waitMs(150);
-      list = doc2pdf.scribdPageList(window.docManager);
-    }
-    if (list.length === 0) {
-      list = doc2pdf.scribdPagesFromHtml(document.documentElement.innerHTML);
-    }
-    if (list.length === 0) {
-      throw new Error("Không đọc được docManager của Scribd");
-    }
-
-    setStatus(`Đang lấy trang 0/${list.length}…`);
-    // ponytail: 4 trang một lúc — Scribd load() nặng; tài liệu hàng trăm trang
-    // nâng lên p-limit/queue nếu máy đứng.
-    let done = 0;
-    const pages = (
-      await doc2pdf.mapPool(list, 4, async (p) => {
-        const html = await htmlFromScribdPage(p);
-        done++;
-        setStatus(`Đang lấy trang ${done}/${list.length}…`);
-        return html ? { html, width: p.origWidth, height: p.origHeight } : null;
-      })
-    ).filter(Boolean);
-
-    if (pages.length === 0) throw new Error("Scribd không trả nội dung trang nào");
-    const first = window.docManager?.firstVisiblePage;
-    return {
-      pages,
-      width: first?.origWidth ?? pages[0].width,
-      height: first?.origHeight ?? pages[0].height,
-    };
   }
 
   function triggerChromeDownload(blob, filename) {
@@ -210,157 +303,330 @@
     setTimeout(() => URL.revokeObjectURL(url), 15000);
   }
 
-  function standaloneHtml(pages, W, H, title) {
-    const safe = String(title ?? "document").replace(/&/g, "&amp;").replace(/</g, "&lt;");
-    return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${safe}</title>
-<style>body{margin:0}.pg{position:relative;overflow:hidden;page-break-after:always}@page{margin:0;size:${W}px ${H}px}</style>
-</head><body>
-${pages.map((p) => `<div class="pg" style="width:${p.width ?? W}px;height:${p.height ?? H}px">${p.html}</div>`).join("")}
-</body></html>`;
+  function xhrBlob(url, signal) {
+    return new Promise((resolve, reject) => {
+      throwIfAborted(signal);
+      const xhr = new XMLHttpRequest();
+      const onAbort = () => {
+        cleanup();
+        xhr.abort();
+        reject(abortError());
+      };
+      const cleanup = () => signal?.removeEventListener("abort", onAbort);
+      xhr.open("GET", url);
+      xhr.responseType = "blob";
+      xhr.withCredentials = true;
+      xhr.timeout = 8000;
+      xhr.onload = () => {
+        cleanup();
+        if (xhr.status >= 200 && xhr.status < 300) resolve(xhr.response);
+        else reject(new Error("HTTP " + xhr.status));
+      };
+      xhr.onerror = () => {
+        cleanup();
+        reject(new Error("Không tải được ảnh"));
+      };
+      xhr.ontimeout = () => {
+        cleanup();
+        reject(new Error("Hết thời gian tải ảnh"));
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+      xhr.send();
+    });
   }
 
-  async function inlineImages(root) {
-    const imgs = [...root.querySelectorAll("img")];
-    await Promise.all(
-      imgs.map(async (img) => {
-        const src = img.currentSrc || img.getAttribute("src") || "";
-        if (!src || src.startsWith("data:") || src.startsWith("blob:")) return;
-        try {
-          const blob = await new Promise((resolve, reject) => {
-            const x = new XMLHttpRequest();
-            x.open("GET", src);
-            x.responseType = "blob";
-            x.withCredentials = true;
-            x.timeout = 8000;
-            x.onload = () =>
-              x.status >= 200 && x.status < 300 ? resolve(x.response) : reject(new Error(String(x.status)));
-            x.onerror = () => reject(new Error("xhr"));
-            x.ontimeout = () => reject(new Error("timeout"));
-            x.send();
-          });
-          img.src = URL.createObjectURL(blob);
-          await new Promise((res) => {
-            img.onload = img.onerror = res;
-          });
-        } catch {}
-      })
-    );
-  }
-
-  async function exportDocument(setStatus) {
-    setStatus("Đang đọc tài liệu…");
-    const data = site === "scribd" ? await extractScribd(setStatus) : await extractStudocu(setStatus);
-    const { pages } = data;
-    const W = data.width ?? 794;
-    const H = data.height ?? 1123;
-    const title = document.title || "document";
-
-    document.getElementById("doc2pdf-print")?.remove();
-
-    setStatus(`Đang dựng ${pages.length} trang…`);
-    const wrap = document.createElement("div");
-    wrap.id = "doc2pdf-print";
-    wrap.style.cssText = "position:absolute;left:-20000px;top:0;pointer-events:none;";
-    for (const p of pages) {
-      const pg = document.createElement("div");
-      pg.style.cssText = `position:relative;overflow:hidden;background:#fff;width:${p.width ?? W}px;height:${p.height ?? H}px;`;
-      pg.innerHTML = p.html;
-      wrap.appendChild(pg);
-    }
-    document.body.append(wrap);
-    try {
-    setStatus("Đang tải ảnh…");
-    await inlineImages(wrap);
-    await Promise.all(
-      [...wrap.querySelectorAll("img")].map((img) =>
-        img.complete
-          ? null
-          : new Promise((res) => {
-              img.onload = img.onerror = res;
-            })
-      )
-    );
-    try {
-      await document.fonts.ready;
-    } catch {}
-    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-
-    let blob;
-    let filename;
-    try {
-      if (typeof html2canvas !== "function") throw new Error("html2canvas missing");
-      const jpegPages = [];
-      for (let i = 0; i < wrap.children.length; i++) {
-        setStatus(`Đang chụp trang ${i + 1}/${wrap.children.length}…`);
-        const canvas = await html2canvas(wrap.children[i], {
-          scale: 2,
-          useCORS: true,
-          allowTaint: false,
-          backgroundColor: "#ffffff",
-          logging: false,
-          imageTimeout: 4000,
-        });
-        const bytes = doc2pdf.dataUrlToBytes(canvas.toDataURL("image/jpeg", 0.92));
-        if (!bytes) throw new Error("toDataURL");
-        jpegPages.push({
-          jpeg: bytes,
-          pageWidthPx: pages[i].width ?? W,
-          pageHeightPx: pages[i].height ?? H,
-          imgWidth: canvas.width,
-          imgHeight: canvas.height,
-        });
+  function assignImageUrl(img, url, signal) {
+    return new Promise((resolve, reject) => {
+      throwIfAborted(signal);
+      let settled = false;
+      const timer = setTimeout(
+        () => finish(reject, new Error("Hết thời gian tải ảnh")),
+        8000
+      );
+      const onAbort = () => finish(reject, abortError());
+      function cleanup() {
+        clearTimeout(timer);
+        img.onload = null;
+        img.onerror = null;
+        signal?.removeEventListener("abort", onAbort);
       }
-      const pdf = doc2pdf.jpegPagesToPdf(jpegPages);
-      if (!pdf) throw new Error("pdf");
-      blob = new Blob([pdf], { type: "application/pdf" });
-      filename = doc2pdf.downloadFilename(title, "pdf");
-    } catch {
-      setStatus("Canvas lỗi, đang tải HTML…");
-      blob = new Blob([standaloneHtml(pages, W, H, title)], { type: "text/html;charset=utf-8" });
-      filename = doc2pdf.downloadFilename(title, "html");
-    }
-
-    triggerChromeDownload(blob, filename);
-    } finally {
-      wrap.remove();
-    }
+      function finish(fn, value) {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        fn(value);
+      }
+      img.onload = () => {
+        if (img.naturalWidth > 0) finish(resolve);
+        else finish(reject, new Error("Không đọc được ảnh"));
+      };
+      img.onerror = () => finish(reject, new Error("Không đọc được ảnh"));
+      signal?.addEventListener("abort", onAbort, { once: true });
+      img.src = url;
+      if (img.complete) img.onload();
+    });
   }
 
-  async function onDownload(btn) {
-    const idle = "↓ PDF";
-    if (btn.disabled) return;
-    btn.disabled = true;
+  async function inlineImages(root, signal) {
+    const urls = [];
+    let failure;
+    const cleanup = () => {
+      for (const url of urls.splice(0)) URL.revokeObjectURL(url);
+    };
     try {
-      await exportDocument((s) => (btn.textContent = s));
-      btn.textContent = idle;
-    } catch (e) {
-      const msg = String(e?.message || e);
-      btn.textContent = `Lỗi: ${msg.slice(0, 60)}`;
-      btn.title = msg; // giữ lại đến lần bấm sau để kịp đọc
-    } finally {
-      btn.disabled = false;
+      await doc2pdf.mapPool([...root.querySelectorAll("img")], 4, async (img) => {
+        if (failure) return;
+        const src = img.currentSrc || img.getAttribute("src") || "";
+        if (!src) return;
+        try {
+          throwIfAborted(signal);
+          let url = src;
+          if (!src.startsWith("data:") && !src.startsWith("blob:")) {
+            const blob = await xhrBlob(src, signal);
+            throwIfAborted(signal);
+            url = URL.createObjectURL(blob);
+            urls.push(url);
+          }
+          await assignImageUrl(img, url, signal);
+        } catch (error) {
+          failure ||= error;
+        }
+      });
+      throwIfAborted(signal);
+      if (failure) throw failure;
+      return cleanup;
+    } catch (error) {
+      cleanup();
+      throw error;
     }
   }
 
-  function addButton() {
-    if (document.getElementById(BTN_ID)) return;
-    const btn = document.createElement("button");
-    btn.id = BTN_ID;
-    btn.type = "button";
-    btn.textContent = "↓ PDF";
-    btn.title = "Tải tài liệu về máy (thanh Download của Chrome)";
-    btn.style.cssText =
-      "position:fixed;right:20px;bottom:20px;z-index:2147483647;background:#1a73e8;color:#fff;" +
-      "border:none;border-radius:24px;padding:10px 16px;font:600 14px/1 sans-serif;cursor:pointer;" +
-      "box-shadow:0 2px 8px rgba(0,0,0,.35);";
-    btn.addEventListener("click", () => onDownload(btn), { once: false });
-    document.body.appendChild(btn);
+  async function exportDocument({ from, to, preset, signal, setStatus }) {
+    setStatus("Đang đọc tài liệu…");
+    const data =
+      site === "scribd"
+        ? await extractScribd({ from, to, signal, setStatus })
+        : await extractStudocu({ from, to, signal, setStatus });
+    const quality = doc2pdf.qualitySettings(preset, data.pages.length);
+    const defaultWidth = data.pages[0]?.width || 794;
+    const defaultHeight = data.pages[0]?.height || 1123;
+    const jpegPages = [];
+    let jpegBytes = 0;
+
+    const stage = document.createElement("div");
+    stage.id = "doc2pdf-print";
+    stage.style.cssText =
+      "position:absolute;left:-20000px;top:0;pointer-events:none;";
+    document.body.append(stage);
+
+    try {
+      for (let index = 0; index < data.pages.length; index++) {
+        throwIfAborted(signal);
+        const page = data.pages[index];
+        const width = page.width || defaultWidth;
+        const height = page.height || defaultHeight;
+        const pageBox = document.createElement("div");
+        pageBox.style.cssText =
+          "position:relative;overflow:hidden;background:#fff;width:" +
+          width +
+          "px;height:" +
+          height +
+          "px;";
+        pageBox.innerHTML = page.html;
+        stage.replaceChildren(pageBox);
+
+        let releaseImages = () => {};
+        let canvas;
+        try {
+          setStatus("Đang tải ảnh trang " + (index + 1) + "/" + data.pages.length + "…");
+          releaseImages = await inlineImages(pageBox, signal);
+          await document.fonts.ready.catch(() => {});
+          throwIfAborted(signal);
+          setStatus("Đang chụp trang " + (index + 1) + "/" + data.pages.length + "…");
+          canvas = await html2canvas(pageBox, {
+            scale: quality.scale,
+            useCORS: true,
+            allowTaint: false,
+            backgroundColor: "#ffffff",
+            logging: false,
+            imageTimeout: 4000,
+          });
+          throwIfAborted(signal);
+          const bytes = doc2pdf.dataUrlToBytes(
+            canvas.toDataURL("image/jpeg", quality.jpegQuality)
+          );
+          if (!bytes) throw new Error("Không tạo được JPEG");
+          jpegBytes += bytes.length;
+          jpegPages.push({
+            jpeg: bytes,
+            pageWidthPx: width,
+            pageHeightPx: height,
+            imgWidth: canvas.width,
+            imgHeight: canvas.height,
+          });
+          const estimatedMiB =
+            (jpegBytes / (index + 1)) * data.pages.length / 1024 / 1024;
+          setStatus(
+            "Đã chụp " +
+              (index + 1) +
+              "/" +
+              data.pages.length +
+              " · ước tính " +
+              estimatedMiB.toFixed(1) +
+              " MB"
+          );
+        } catch (error) {
+          if (error?.name === "AbortError") throw error;
+          throw new Error(
+            "Trang " +
+              (page.pageNumber || data.range.from + index) +
+              ": " +
+              String(error?.message || error)
+          );
+        } finally {
+          if (canvas) {
+            canvas.width = 1;
+            canvas.height = 1;
+          }
+          releaseImages();
+          stage.replaceChildren();
+        }
+      }
+
+      throwIfAborted(signal);
+      setStatus("Đang ghép PDF…");
+      const pdf = doc2pdf.jpegPagesToPdf(jpegPages);
+      if (!pdf) throw new Error("Không ghép được PDF");
+      triggerChromeDownload(
+        new Blob([pdf], { type: "application/pdf" }),
+        doc2pdf.downloadFilename(document.title || "document", "pdf")
+      );
+    } finally {
+      stage.remove();
+    }
   }
 
-  if (document.body) addButton();
-  // Trang SPA re-render và xoá mất nút — thêm lại khi thấy nút biến mất.
-  new MutationObserver(addButton).observe(document.documentElement, {
+  const WIDGET_MARKUP = [
+    "<style>",
+    ":host{all:initial;position:fixed;right:20px;bottom:20px;z-index:2147483647;font:13px/1.35 system-ui,sans-serif;color:#202124}",
+    ".panel{width:250px;padding:12px;border-radius:14px;background:#fff;box-shadow:0 3px 16px rgba(0,0,0,.35)}",
+    ".row{display:flex;gap:8px;margin-bottom:8px}",
+    "label{flex:1;display:grid;gap:3px}",
+    "input,select,button{box-sizing:border-box;min-height:34px;font:inherit}",
+    "input,select{width:100%;border:1px solid #dadce0;border-radius:7px;padding:5px 7px}",
+    "button{width:100%;border:0;border-radius:18px;background:#1a73e8;color:#fff;font-weight:700;cursor:pointer}",
+    "#doc2pdf-status{min-height:18px;margin-top:7px;color:#5f6368;overflow-wrap:anywhere}",
+    "</style>",
+    '<div class="panel">',
+    '<div class="row">',
+    '<label>Từ trang<input id="doc2pdf-from" type="number" min="1" step="1" value="1"></label>',
+    '<label>Đến trang<input id="doc2pdf-to" type="number" min="1" step="1" placeholder="Cuối"></label>',
+    "</div>",
+    "<label>Chất lượng",
+    '<select id="doc2pdf-quality">',
+    '<option value="auto">Tự động</option>',
+    '<option value="high">Cao</option>',
+    '<option value="balanced">Cân bằng</option>',
+    '<option value="small">Nhẹ</option>',
+    "</select>",
+    "</label>",
+    '<button id="doc2pdf-start" type="button">↓ PDF</button>',
+    '<div id="doc2pdf-status" role="status" aria-live="polite"></div>',
+    "</div>",
+  ].join("");
+
+  function createWidget() {
+    if (document.getElementById(BTN_ID) || !document.body) return;
+    const host = document.createElement("div");
+    host.id = BTN_ID;
+    const root = host.attachShadow({ mode: "open" });
+    root.innerHTML = WIDGET_MARKUP;
+
+    const from = root.getElementById("doc2pdf-from");
+    const to = root.getElementById("doc2pdf-to");
+    const quality = root.getElementById("doc2pdf-quality");
+    const start = root.getElementById("doc2pdf-start");
+    const status = root.getElementById("doc2pdf-status");
+    const setStatus = (text) => {
+      status.textContent = text;
+      start.title = text;
+    };
+
+    start.addEventListener("click", async () => {
+      if (activeController) {
+        activeController.abort();
+        setStatus("Đang hủy…");
+        return;
+      }
+
+      const controller = new AbortController();
+      activeController = controller;
+      from.disabled = true;
+      to.disabled = true;
+      quality.disabled = true;
+      start.textContent = "Hủy";
+      try {
+        if (typeof html2canvas !== "function") {
+          throw new Error("Thiếu html2canvas");
+        }
+        await exportDocument({
+          from: from.value,
+          to: to.value,
+          preset: quality.value,
+          signal: controller.signal,
+          setStatus,
+        });
+        setStatus("Đã tải PDF");
+      } catch (error) {
+        if (error?.name === "AbortError") {
+          setStatus("Đã hủy");
+        } else {
+          setStatus(
+            String(error?.message || error) +
+              ". Thử phạm vi ngắn hơn hoặc chất lượng thấp hơn."
+          );
+        }
+      } finally {
+        controller.abort();
+        if (activeController === controller) activeController = null;
+        from.disabled = false;
+        to.disabled = false;
+        quality.disabled = false;
+        start.textContent = "↓ PDF";
+      }
+    });
+
+    document.body.append(host);
+  }
+
+  let lastHref = "";
+  let activeController = null;
+
+  function syncWidget() {
+    const host = document.getElementById(BTN_ID);
+    if (location.href === lastHref && host) return;
+    lastHref = location.href;
+    const supported = doc2pdf.isDocPath(location.pathname, site);
+    if (supported && !host && document.body) createWidget();
+    if (!supported && host) {
+      activeController?.abort();
+      host.remove();
+    }
+  }
+
+  for (const method of ["pushState", "replaceState"]) {
+    const original = history[method];
+    history[method] = function (...args) {
+      const result = Reflect.apply(original, this, args);
+      queueMicrotask(syncWidget);
+      return result;
+    };
+  }
+  window.addEventListener("popstate", syncWidget);
+  window.addEventListener("hashchange", syncWidget);
+  new MutationObserver(syncWidget).observe(document.documentElement, {
     childList: true,
     subtree: true,
   });
+  syncWidget();
 })();

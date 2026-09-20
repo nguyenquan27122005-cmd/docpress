@@ -1,0 +1,31 @@
+{
+  "name": "doc2pdf",
+  "version": "1.2.0",
+  "description": "Fast & lightweight Chromium extension to export Studocu and Scribd documents to PDF",
+  "type": "module",
+  "scripts": {
+    "test": "node test.mjs",
+    "test:real": "node real-test.mjs"
+  },
+  "keywords": [
+    "chrome-extension",
+    "manifest-v3",
+    "studocu-downloader",
+    "scribd-downloader",
+    "pdf-export",
+    "pdf-generator",
+    "scribd",
+    "studocu",
+    "browser-extension"
+  ],
+  "author": "nguyenquan27122005-cmd",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nguyenquan27122005-cmd/doc2pdf.git"
+  },
+  "bugs": {
+    "url": "https://github.com/nguyenquan27122005-cmd/doc2pdf/issues"
+  },
+  "homepage": "https://github.com/nguyenquan27122005-cmd/doc2pdf#readme"
+}

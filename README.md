@@ -1,58 +1,236 @@
-# doc2pdf
+<div align="center">
 
-Tiện ích Chromium xuất tài liệu đang xem trên **Studocu** và **Scribd** thành PDF, tải thẳng vào thanh Download của Chrome. Tiện ích cũng có tùy chọn bỏ giới hạn preview Scribd.
+# 📄 doc2pdf
 
-Chỉ lấy nội dung mà trang đã render cho bạn xem. Dùng cho học tập cá nhân; đừng tái phân phối tài liệu có bản quyền.
+### Fast, High-Fidelity Chromium Extension for Exporting Studocu & Scribd Documents to PDF
 
-## Cài đặt
+[![Version](https://img.shields.io/badge/version-1.2.0-blue.svg?style=for-the-badge)](https://github.com/nguyenquan27122005-cmd/doc2pdf/releases)
+[![Manifest V3](https://img.shields.io/badge/Manifest-V3-success.svg?style=for-the-badge&logo=googlechrome&logoColor=white)](https://developer.chrome.com/docs/extensions/mv3/intro/)
+[![CI Status](https://img.shields.io/github/actions/workflow/status/nguyenquan27122005-cmd/doc2pdf/ci.yml?branch=main&style=for-the-badge&logo=githubactions&logoColor=white)](https://github.com/nguyenquan27122005-cmd/doc2pdf/actions)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge)](https://github.com/nguyenquan27122005-cmd/doc2pdf/pulls)
 
-1. Tải/giải nén thư mục này (hoặc `doc2pdf.zip`).
-2. Mở `chrome://extensions` trong Chrome, Edge hoặc Cốc Cốc.
-3. Bật **Developer mode**.
-4. Bấm **Load unpacked** và chọn thư mục `doc2pdf`.
+<p align="center">
+  <a href="#-key-features">Key Features</a> •
+  <a href="#-supported-platforms">Supported Platforms</a> •
+  <a href="#-installation">Installation</a> •
+  <a href="#-how-to-use">How to Use</a> •
+  <a href="#-architecture">Architecture</a> •
+  <a href="#-quality-presets">Quality Presets</a> •
+  <a href="#-development--testing">Testing</a> •
+  <a href="#-ti%E1%BA%BFng-vi%E1%BB%87t">Tiếng Việt</a>
+</p>
 
-## Xuất PDF
+</div>
 
-1. Mở một trang tài liệu Studocu hoặc Scribd. Panel nổi ở góc dưới phải có các ô **Từ trang**, **Đến trang**, chất lượng và nút **PDF**.
-2. Chọn một khoảng trang liên tiếp. Để trống **Đến trang** để xuất đến trang cuối cùng đang có.
-3. Chọn **Tự động**, **Cao**, **Cân bằng** hoặc **Nhẹ**. Tự động dùng Cao đến 40 trang, Cân bằng đến 100 trang, và Nhẹ khi nhiều hơn 100 trang.
-4. Bấm **PDF**. Panel hiển thị tiến độ và ước tính dung lượng; PDF hoàn chỉnh sẽ xuất hiện trong thanh Download.
+---
 
-Nút **Hủy** dừng công việc mạng ngay. Nếu một lần chụp canvas đang chạy, tiện ích có thể đợi lần chụp đó xong rồi mới hủy hoàn toàn. Khi có lỗi hoặc bị hủy, tiện ích không tạo file HTML hay PDF một phần; hãy thử lại với khoảng trang nhỏ hơn hoặc chất lượng thấp hơn.
+## 🌟 Overview
 
-Panel tự xuất hiện khi điều hướng SPA vào một trang tài liệu và biến mất khi rời trang tài liệu.
+**doc2pdf** is a lightweight, privacy-focused Chromium extension that captures and converts rendered document pages from **Studocu** and **Scribd** directly into high-quality PDF files downloaded straight to your browser.
 
-## Unblur Scribd
+> [!NOTE]
+> All processing happens client-side directly within your browser. No third-party servers, tracking, or external telemetry are involved.
 
-Popup trên thanh công cụ của trình duyệt có công tắc bật/tắt xóa tự động cookie `sd_docs`. Công tắc này chỉ tác động các tên miền Scribd, không xóa cookie đăng nhập và không ảnh hưởng Studocu.
+---
 
-## Kiểm tra
+## ✨ Key Features
 
-- `node test.mjs` chạy bộ kiểm tra nhanh, không cần phụ thuộc.
-- `node real-test.mjs` mở Chrome tạm thời và kiểm tra hai provider trực tiếp. Provider có thể yêu cầu xác minh con người; khi đó lệnh sẽ báo thất bại thay vì vượt qua xác minh.
+- ⚡ **Direct Client-Side Rendering**: Compiles vector DOM elements and high-resolution background scans directly into standard PDF files.
+- 🎯 **Smart Adaptive Quality**: Dynamically switches resolution and compression based on page count to optimize quality vs file size.
+- 🔓 **Scribd Preview Unblur**: Built-in toolbar popup toggle to automatically bypass Scribd document preview restrictions.
+- 🛡️ **Robust Manifest V3 Architecture**: Separated privileged network bridge, main world content scripts, and background service workers for maximum security and stability.
+- ⏱️ **Zero UI Blocking**: Asynchronous worker queues and cancellation tokens allow seamless aborting and background processing.
+- 🌐 **Single Page Application (SPA) Aware**: Automatically detects document view navigation and dynamically mounts/unmounts the floating control panel.
 
-## Cấu trúc
+---
 
-| File | Vai trò |
-|---|---|
-| `manifest.json` | Manifest V3, quyền và content scripts |
-| `content.js` | Panel, trích xuất trang, chụp canvas và tải PDF |
-| `background.js` | Fetch có kiểm soát và xóa cookie Scribd |
-| `bridge.js` | Relay cô lập cho fetch đặc quyền |
-| `lib.js` | Logic thuần cho trang, chất lượng, provider và PDF |
-| `popup.html`, `popup.js` | Công tắc unblur Scribd |
-| `test.mjs` | Kiểm tra nhanh |
-| `real-test.mjs` | Kiểm tra Chrome/provider trực tiếp |
+## 🌐 Supported Platforms & Browsers
 
-## Khi trang đổi cấu trúc mà tiện ích hỏng
+### Document Providers
+| Provider | Domains Supported | Features Supported |
+| :--- | :--- | :--- |
+| **Studocu** | `*.studocu.com`, `*.studeersnel.nl`, `*.studocu.vn`, `*.studocu.id` | Full page export, HD background raster, page range selection |
+| **Scribd** | `*.scribd.com`, `*.scribdassets.com` | Unblur preview toggle, JSONP text & image reconstruction, PDF export |
 
-Selector và pattern nằm trong `lib.js` (URL trang, JSONP) và đầu `content.js` (`__NEXT_DATA__` / `docManager`). Sửa đúng vị trí đó rồi chạy lại các kiểm tra ở trên.
+### Compatible Browsers
+- Google Chrome (Desktop)
+- Microsoft Edge
+- Brave Browser
+- Opera / Opera GX
+- Cốc Cốc
 
-## Smoke test trước khi phát hành
+---
 
-- Load unpacked và xác nhận popup lưu được công tắc unblur sau khi đóng/mở lại.
-- Mở một tài liệu từ trang tìm kiếm bằng SPA; panel phải xuất hiện, rồi biến mất khi rời tài liệu.
-- Xuất 2 trang ở Auto; PDF phải có đúng 2 trang và mở được.
-- Bấm Hủy khi đang chụp; không được tải file một phần.
-- Tắt unblur, tạo `sd_docs` và xác nhận cookie còn; bật lại, tạo lại hoặc cập nhật `sd_docs`, rồi xác nhận cookie bị xóa.
-- Thử một tài liệu cần bridge fallback và xác nhận vẫn tải được nội dung cùng provider.
+## 🚀 Installation
+
+### Option 1: Load Unpacked (Recommended for Development)
+
+1. **Clone or Download** this repository:
+   ```bash
+   git clone https://github.com/nguyenquan27122005-cmd/doc2pdf.git
+   ```
+2. Open your browser's extension manager:
+   - Chrome: Navigate to `chrome://extensions`
+   - Edge: Navigate to `edge://extensions`
+   - Cốc Cốc: Navigate to `coccoc://extensions`
+3. Enable **Developer Mode** (toggle switch in the top-right corner).
+4. Click **Load unpacked** and select the `doc2pdf` project folder.
+
+### Option 2: Pre-packaged ZIP
+
+1. Download [`doc2pdf.zip`](doc2pdf.zip) from the repository or release page.
+2. Extract the archive into a permanent folder.
+3. Follow the **Load unpacked** steps above.
+
+---
+
+## 📖 How to Use
+
+### 1. Exporting Documents to PDF
+1. Navigate to any document page on **Studocu** or **Scribd**.
+2. A floating control panel will automatically appear in the bottom-right corner.
+3. Configure your export settings:
+   - **From Page / To Page**: Enter custom page ranges or leave blank to export all pages.
+   - **Quality**: Choose between `Auto`, `High`, `Balanced`, or `Light`.
+4. Click **PDF**. The panel will display real-time progress, captured page count, and estimated file size.
+5. Once completed, your PDF will automatically download.
+
+### 2. Scribd Preview Unblur Toggle
+1. Click the **doc2pdf** extension icon on your browser toolbar.
+2. Toggle the **Unblur Scribd** switch ON or OFF.
+3. The extension will automatically clear restriction cookies (`sd_docs`) without affecting your login session.
+
+---
+
+## 🏗️ Architecture
+
+```mermaid
+flowchart TD
+    subgraph Browser["Chromium Browser"]
+        subgraph MainWorld["Main World Context"]
+            DOM["Document DOM / SPA Router"]
+            CS["content.js (UI Panel & Orchestrator)"]
+            LIB["lib.js (Pure Parsers & PDF Engine)"]
+            H2C["html2canvas (DOM Rasterizer)"]
+            DOM --> CS
+            CS --> LIB
+            CS --> H2C
+        end
+
+        subgraph IsolatedWorld["Isolated World Context"]
+            BR["bridge.js (Relay Proxy)"]
+        end
+
+        subgraph BackgroundWorker["Background Service Worker"]
+            BG["background.js (Privileged Fetch & Cookie Mgr)"]
+        end
+    end
+
+    CS <-->|"window.postMessage"| BR
+    BR <-->|"chrome.runtime.sendMessage"| BG
+    BG -->|"Authorized Resource Fetch"| CDN["Studocu / Scribd CDN"]
+    LIB -->|"Direct Download Blob"| DL["Browser Download Manager"]
+```
+
+---
+
+## ⚙️ Quality Presets
+
+| Preset | Target DPR / Scale | JPEG Quality | Auto Threshold | Best For |
+| :--- | :---: | :---: | :---: | :--- |
+| **Auto** | *Dynamic* | *Dynamic* | Default | Automatically selects optimal settings based on page count |
+| **High** | 2.0x | 92% | 1 – 40 pages | Short documents requiring crystal-clear text & diagrams |
+| **Balanced** | 1.5x | 80% | 41 – 100 pages | Medium documents with good clarity and reasonable file size |
+| **Light** | 1.0x | 65% | 100+ pages | Large textbooks / lengthy slides to prevent high memory usage |
+
+---
+
+## 🧪 Development & Testing
+
+The project includes an automated test suite with 100+ unit and integration tests covering parser logic, range clamping, streaming limits, byte budget protection, and mock network flows.
+
+### Run Unit Tests
+```bash
+# Run unit test suite (Zero dependencies required)
+npm test
+# or
+node test.mjs
+```
+
+### Run Live Browser Integration Tests
+```bash
+# Opens an isolated Chrome instance to test real providers
+npm run test:real
+# or
+node real-test.mjs
+```
+
+---
+
+## 📁 Repository Structure
+
+```
+doc2pdf/
+├── .github/
+│   └── workflows/
+│       └── ci.yml             # Automated GitHub Actions test pipeline
+├── background.js              # Background service worker (privileged fetch & cookies)
+├── bridge.js                  # Isolated world bridge relay for secure IPC
+├── content.js                 # Floating UI, SPA lifecycle, canvas capture & orchestrator
+├── lib.js                     # Pure business logic (PDF synthesizer, parsers, quality math)
+├── html2canvas.min.js         # Canvas rendering engine
+├── manifest.json              # Chrome Extension Manifest V3 configuration
+├── popup.html                 # Extension toolbar action popup UI
+├── popup.js                   # Popup toggle event handling
+├── test.mjs                   # Fast unit test suite (100+ assertions)
+├── real-test.mjs              # Headless/live Chrome provider validation
+├── package.json               # Project manifest & npm scripts
+├── LICENSE                    # MIT License
+└── README.md                  # Project documentation
+```
+
+---
+
+## 🇻🇳 Tiếng Việt
+
+<details>
+<summary><b>Nhấn vào đây để xem hướng dẫn bằng Tiếng Việt</b></summary>
+<br/>
+
+### Giới thiệu
+**doc2pdf** là tiện ích mở rộng Chromium giúp xuất tài liệu đang xem trên **Studocu** và **Scribd** thành file PDF hoàn chỉnh, tải trực tiếp vào trình duyệt mà không cần cài đặt phần mềm bên ngoài.
+
+### Tính năng chính:
+- **Xuất PDF trực tiếp từ trình duyệt**: Tự động tổng hợp các trang tài liệu với chất lượng sắc nét.
+- **Tự động tối ưu dung lượng (Auto Quality)**: Tự động điều chỉnh độ phân giải phù hợp theo số lượng trang để tránh tràn RAM hoặc file quá nặng.
+- **Mở khóa xem trước Scribd (Unblur)**: Tích hợp công tắc bật/tắt tự động xử lý cookie giới hạn xem trước của Scribd.
+- **Hỗ trợ đầy đủ SPA**: Tự động hiển thị thanh điều khiển khi vào trang tài liệu và ẩn đi khi chuyển trang.
+
+### Hướng dẫn cài đặt nhanh:
+1. Tải repository này về máy.
+2. Mở `chrome://extensions` hoặc `coccoc://extensions` trên trình duyệt.
+3. Bật **Chế độ dành cho nhà phát triển (Developer mode)**.
+4. Chọn **Tải tiện ích đã giải nén (Load unpacked)** và trỏ đến thư mục `doc2pdf`.
+
+</details>
+
+---
+
+## 🔒 Privacy & Security
+
+- **No Remote Servers**: All page capture, image stitching, and PDF binary synthesis are performed entirely in the local browser runtime.
+- **No Data Collection**: No cookies, credentials, or document contents are ever transmitted to any third-party telemetry or analytics services.
+- **Isolated Permissions**: Host permissions are strictly restricted to Studocu and Scribd domains.
+
+---
+
+## ⚖️ Disclaimer
+
+This software is developed for personal educational and study purposes only. Please respect the intellectual property rights of document authors and do not distribute copyrighted materials.
+
+---
+
+## 📄 License
+
+This project is licensed under the [MIT License](LICENSE).

@@ -1,5 +1,5 @@
 {
-  "name": "doc2pdf",
+  "name": "docpress",
   "version": "1.2.0",
   "description": "Fast & lightweight Chromium extension to export Studocu and Scribd documents to PDF",
   "type": "module",
@@ -22,10 +22,10 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/nguyenquan27122005-cmd/doc2pdf.git"
+    "url": "git+https://github.com/nguyenquan27122005-cmd/docpress.git"
   },
   "bugs": {
-    "url": "https://github.com/nguyenquan27122005-cmd/doc2pdf/issues"
+    "url": "https://github.com/nguyenquan27122005-cmd/docpress/issues"
   },
-  "homepage": "https://github.com/nguyenquan27122005-cmd/doc2pdf#readme"
+  "homepage": "https://github.com/nguyenquan27122005-cmd/docpress#readme"
 }

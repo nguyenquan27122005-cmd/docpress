@@ -1,6 +1,6 @@
-# Contributing to doc2pdf
+# Contributing to DocPress
 
-Thank you for your interest in contributing to **doc2pdf**! 🎉
+Thank you for your interest in contributing to **DocPress**! 🎉
 
 ## Ways to Contribute
 

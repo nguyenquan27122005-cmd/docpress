@@ -1,18 +1,18 @@
 <div align="center">
 
-# 📄 doc2pdf
+# 📄 DocPress
 
-### Fast, High-Fidelity Chromium Extension for Exporting Studocu & Scribd Documents to PDF
+### Chromium Extension for Exporting Studocu & Scribd Document Pages to PDF
 
-[![Version](https://img.shields.io/badge/version-1.2.0-blue.svg?style=for-the-badge)](https://github.com/nguyenquan27122005-cmd/doc2pdf/releases)
+[![Version](https://img.shields.io/badge/version-1.2.0-blue.svg?style=for-the-badge)](https://github.com/nguyenquan27122005-cmd/docpress/releases)
 [![Manifest V3](https://img.shields.io/badge/Manifest-V3-success.svg?style=for-the-badge&logo=googlechrome&logoColor=white)](https://developer.chrome.com/docs/extensions/mv3/intro/)
-[![CI Status](https://img.shields.io/github/actions/workflow/status/nguyenquan27122005-cmd/doc2pdf/ci.yml?branch=main&style=for-the-badge&logo=githubactions&logoColor=white)](https://github.com/nguyenquan27122005-cmd/doc2pdf/actions)
+[![CI Status](https://img.shields.io/github/actions/workflow/status/nguyenquan27122005-cmd/docpress/ci.yml?branch=main&style=for-the-badge&logo=githubactions&logoColor=white)](https://github.com/nguyenquan27122005-cmd/docpress/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge)](https://github.com/nguyenquan27122005-cmd/doc2pdf/pulls)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge)](https://github.com/nguyenquan27122005-cmd/docpress/pulls)
 
 <p align="center">
   <a href="#-key-features">Key Features</a> •
-  <a href="#-supported-platforms">Supported Platforms</a> •
+  <a href="#-supported-platforms--browsers">Supported Platforms</a> •
   <a href="#-installation">Installation</a> •
   <a href="#-how-to-use">How to Use</a> •
   <a href="#-architecture">Architecture</a> •
@@ -25,9 +25,12 @@
 
 ---
 
+> [!WARNING]
+> **Runtime audit (2026-10-19):** Controlled documents export successfully, but the tested public Scribd and Studocu samples failed on image loading. Studocu pages without dimensions can also be cropped. The existing live smoke test can pass while the export button fails. See the [audit report and reproduction steps](https://github.com/nguyenquan27122005-cmd/docpress/blob/main/docs/AUDIT-2026-10-19.md) before relying on the current release.
+
 ## 🌟 Overview
 
-**doc2pdf** is a lightweight, privacy-focused Chromium extension that captures and converts rendered document pages from **Studocu** and **Scribd** directly into high-quality PDF files downloaded straight to your browser.
+**DocPress** is a lightweight, privacy-focused Chromium extension that captures and converts rendered document pages from **Studocu** and **Scribd** directly into high-quality PDF files downloaded straight to your browser.
 
 > [!NOTE]
 > All processing happens client-side directly within your browser. No third-party servers, tracking, or external telemetry are involved.
@@ -36,7 +39,7 @@
 
 ## ✨ Key Features
 
-- ⚡ **Direct Client-Side Rendering**: Compiles vector DOM elements and high-resolution background scans directly into standard PDF files.
+- ⚡ **Direct Client-Side Rendering**: Captures document content as one JPEG per PDF page. Text and vectors are rasterized; output text is not selectable.
 - 🎯 **Smart Adaptive Quality**: Dynamically switches resolution and compression based on page count to optimize quality vs file size.
 - 🔓 **Scribd Preview Unblur**: Built-in toolbar popup toggle to automatically bypass Scribd document preview restrictions.
 - 🛡️ **Robust Manifest V3 Architecture**: Separated privileged network bridge, main world content scripts, and background service workers for maximum security and stability.
@@ -68,18 +71,18 @@
 
 1. **Clone or Download** this repository:
    ```bash
-   git clone https://github.com/nguyenquan27122005-cmd/doc2pdf.git
+   git clone https://github.com/nguyenquan27122005-cmd/docpress.git
    ```
 2. Open your browser's extension manager:
    - Chrome: Navigate to `chrome://extensions`
    - Edge: Navigate to `edge://extensions`
    - Cốc Cốc: Navigate to `coccoc://extensions`
 3. Enable **Developer Mode** (toggle switch in the top-right corner).
-4. Click **Load unpacked** and select the `doc2pdf` project folder.
+4. Click **Load unpacked** and select the `docpress` project folder.
 
 ### Option 2: Pre-packaged ZIP
 
-1. Download [`doc2pdf.zip`](doc2pdf.zip) from the repository or release page.
+1. Download [`docpress.zip`](docpress.zip) from the repository or release page.
 2. Extract the archive into a permanent folder.
 3. Follow the **Load unpacked** steps above.
 
@@ -97,7 +100,7 @@
 5. Once completed, your PDF will automatically download.
 
 ### 2. Scribd Preview Unblur Toggle
-1. Click the **doc2pdf** extension icon on your browser toolbar.
+1. Click the **DocPress** extension icon on your browser toolbar.
 2. Toggle the **Unblur Scribd** switch ON or OFF.
 3. The extension will automatically clear restriction cookies (`sd_docs`) without affecting your login session.
 
@@ -141,8 +144,8 @@ flowchart TD
 | :--- | :---: | :---: | :---: | :--- |
 | **Auto** | *Dynamic* | *Dynamic* | Default | Automatically selects optimal settings based on page count |
 | **High** | 2.0x | 92% | 1 – 40 pages | Short documents requiring crystal-clear text & diagrams |
-| **Balanced** | 1.5x | 80% | 41 – 100 pages | Medium documents with good clarity and reasonable file size |
-| **Light** | 1.0x | 65% | 100+ pages | Large textbooks / lengthy slides to prevent high memory usage |
+| **Balanced** | 1.5x | 88% | 41 – 100 pages | Medium documents with good clarity and reasonable file size |
+| **Light** | 1.0x | 80% | 101+ pages | Large textbooks / lengthy slides to prevent high memory usage |
 
 ---
 
@@ -158,7 +161,7 @@ npm test
 node test.mjs
 ```
 
-### Run Live Browser Integration Tests
+### Run Provider Parsing Smoke Tests
 ```bash
 # Opens an isolated Chrome instance to test real providers
 npm run test:real
@@ -166,12 +169,14 @@ npm run test:real
 node real-test.mjs
 ```
 
+This script injects page scripts and uses a separate PDF probe. It does not load the complete extension or click its export button. For actual-extension checks and known failures, see the [runtime audit](https://github.com/nguyenquan27122005-cmd/docpress/blob/main/docs/AUDIT-2026-10-19.md).
+
 ---
 
 ## 📁 Repository Structure
 
 ```
-doc2pdf/
+docpress/
 ├── .github/
 │   └── workflows/
 │       └── ci.yml             # Automated GitHub Actions test pipeline
@@ -199,7 +204,7 @@ doc2pdf/
 <br/>
 
 ### Giới thiệu
-**doc2pdf** là tiện ích mở rộng Chromium giúp xuất tài liệu đang xem trên **Studocu** và **Scribd** thành file PDF hoàn chỉnh, tải trực tiếp vào trình duyệt mà không cần cài đặt phần mềm bên ngoài.
+**DocPress** là tiện ích mở rộng Chromium giúp xuất tài liệu đang xem trên **Studocu** và **Scribd** thành file PDF hoàn chỉnh, tải trực tiếp vào trình duyệt mà không cần cài đặt phần mềm bên ngoài.
 
 ### Tính năng chính:
 - **Xuất PDF trực tiếp từ trình duyệt**: Tự động tổng hợp các trang tài liệu với chất lượng sắc nét.
@@ -211,7 +216,7 @@ doc2pdf/
 1. Tải repository này về máy.
 2. Mở `chrome://extensions` hoặc `coccoc://extensions` trên trình duyệt.
 3. Bật **Chế độ dành cho nhà phát triển (Developer mode)**.
-4. Chọn **Tải tiện ích đã giải nén (Load unpacked)** và trỏ đến thư mục `doc2pdf`.
+4. Chọn **Tải tiện ích đã giải nén (Load unpacked)** và trỏ đến thư mục `docpress`.
 
 </details>
 

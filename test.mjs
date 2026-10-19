@@ -310,6 +310,13 @@ check("bridge targets successful fetch result to page origin", bridge.pageMessag
   targetOrigin: "https://www.scribd.com",
 }]);
 
+const malformedErrors = [];
+for (const data of [null, undefined, 1, "message", []]) {
+  try { bridge.dispatch(data); } catch (error) { malformedErrors.push(error.name); }
+}
+check("bridge ignores malformed page messages without throwing", malformedErrors, []);
+check("bridge does not relay malformed page messages", bridge.runtimeMessages.length, 2);
+
 const cancellableWorker = backgroundFixture((url, options) => new Promise((resolve, reject) => {
   options.signal.addEventListener("abort", () => reject(new DOMException("cancelled", "AbortError")), { once: true });
 }));

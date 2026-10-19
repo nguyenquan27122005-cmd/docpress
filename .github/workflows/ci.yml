@@ -24,3 +24,19 @@ jobs:
 
     - name: Run Test Suite
       run: node test.mjs
+
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - name: Install browser test dependencies
+      run: |
+        python -m pip install -r audits/2026-10-19/requirements.txt
+        python -m playwright install --with-deps chromium
+    - name: Verify real extension exports and error cleanup
+      run: python audits/2026-10-19/browser_fixtures.py
+    - name: Verify full page bounds and cancellation
+      run: python audits/2026-10-19/edge_cases.py

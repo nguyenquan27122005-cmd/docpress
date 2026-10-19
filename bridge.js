@@ -1,6 +1,6 @@
 // Isolated-world relay: MAIN cannot call chrome.runtime directly.
 window.addEventListener("message", (event) => {
-  if (event.source !== window) return;
+  if (event.source !== window || !event.data || typeof event.data !== "object") return;
   const { id, url } = event.data;
   if (!Number.isSafeInteger(id) || id < 1) return;
   if (event.data.type === "doc2pdf-fetch-cancel") {

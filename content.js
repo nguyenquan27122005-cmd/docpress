@@ -335,7 +335,9 @@
       const cleanup = () => signal?.removeEventListener("abort", onAbort);
       xhr.open("GET", url);
       xhr.responseType = "blob";
-      xhr.withCredentials = true;
+      // Public image CDNs use Access-Control-Allow-Origin: *.
+      // Cross-origin cookies would make those responses fail CORS.
+      xhr.withCredentials = false;
       xhr.timeout = 8000;
       xhr.onload = () => {
         cleanup();
@@ -496,6 +498,40 @@
     if (failure) throw failure;
   }
 
+  async function flattenImageClips(root, signal) {
+    // html2canvas ignores legacy clip:rect(), used by Scribd image sprites.
+    // Bake that rectangle into transparent pixels, preserving the image layout.
+    for (const img of root.querySelectorAll("img")) {
+      throwIfAborted(signal);
+      const style = getComputedStyle(img);
+      const match = /^rect\((.*)\)$/.exec(style.clip);
+      if (!match) continue;
+      const width = parseFloat(style.width);
+      const height = parseFloat(style.height);
+      const edges = match[1].split(/[,\s]+/).filter(Boolean);
+      const [top, right, bottom, left] = edges.map((edge, index) =>
+        edge === "auto" ? [0, width, height, 0][index] : parseFloat(edge)
+      );
+      if (!width || !height || ![top, right, bottom, left].every(Number.isFinite)) continue;
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      try {
+        const ctx = canvas.getContext("2d");
+        const xScale = canvas.width / width;
+        const yScale = canvas.height / height;
+        ctx.rect(left * xScale, top * yScale, Math.max(0, right - left) * xScale, Math.max(0, bottom - top) * yScale);
+        ctx.clip();
+        ctx.drawImage(img, 0, 0);
+        img.removeAttribute("srcset");
+        img.src = canvas.toDataURL("image/png");
+        await waitForImage(img, signal);
+      } finally {
+        canvas.width = canvas.height = 1;
+      }
+    }
+  }
+
   async function exportDocument({ from, to, preset, signal, setStatus, title }) {
     setStatus("Đang đọc tài liệu…");
     const data =
@@ -503,8 +539,6 @@
         ? await extractScribd({ from, to, signal, setStatus })
         : await extractStudocu({ from, to, signal, setStatus });
     const quality = doc2pdf.qualitySettings(preset, data.pages.length);
-    const defaultWidth = data.pages[0]?.width || 794;
-    const defaultHeight = data.pages[0]?.height || 1123;
     const jpegPages = [];
     let jpegBytes = 0;
 
@@ -518,15 +552,13 @@
       for (let index = 0; index < data.pages.length; index++) {
         throwIfAborted(signal);
         const page = data.pages[index];
-        const width = page.width || defaultWidth;
-        const height = page.height || defaultHeight;
+        let width = Number(page.width) > 0 ? Number(page.width) : 0;
+        let height = Number(page.height) > 0 ? Number(page.height) : 0;
         const pageBox = document.createElement("div");
         pageBox.style.cssText =
           "position:relative;overflow:hidden;background:#fff;width:" +
-          width +
-          "px;height:" +
-          height +
-          "px;";
+          (width ? width + "px" : "max-content") + ";height:" +
+          (height ? height + "px" : "auto") + ";";
         const pageTemplate = document.createElement("template");
         pageTemplate.innerHTML = page.html;
 
@@ -536,10 +568,23 @@
           setStatus("Đang tải ảnh trang " + (index + 1) + "/" + data.pages.length + "…");
           releaseImages = await inlineImages(pageTemplate.content, signal);
           pageBox.append(pageTemplate.content);
+          if (site === "scribd") {
+            // Viewer zoom is independent of the document's original bounds.
+            pageBox.querySelectorAll(".newpage").forEach((element) => {
+              element.style.transform = "none";
+            });
+          }
           stage.replaceChildren(pageBox);
           await waitForImages(pageBox, signal);
+          await flattenImageClips(pageBox, signal);
           await waitForFonts(signal);
           throwIfAborted(signal);
+          // Measure the loaded wrapper/content before fixing the capture bounds.
+          // Studocu often omits row.width/height entirely.
+          width ||= Math.ceil(Math.max(pageBox.getBoundingClientRect().width, pageBox.scrollWidth)) || 794;
+          height ||= Math.ceil(Math.max(pageBox.getBoundingClientRect().height, pageBox.scrollHeight)) || 1123;
+          pageBox.style.width = width + "px";
+          pageBox.style.height = height + "px";
           setStatus("Đang chụp trang " + (index + 1) + "/" + data.pages.length + "…");
           canvas = await html2canvas(pageBox, {
             scale: quality.scale,

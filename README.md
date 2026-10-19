@@ -4,7 +4,7 @@
 
 ### Chromium Extension for Exporting Studocu & Scribd Document Pages to PDF
 
-[![Version](https://img.shields.io/badge/version-1.2.0-blue.svg?style=for-the-badge)](https://github.com/nguyenquan27122005-cmd/docpress/releases)
+[![Version](https://img.shields.io/badge/version-1.2.1-blue.svg?style=for-the-badge)](https://github.com/nguyenquan27122005-cmd/docpress/releases)
 [![Manifest V3](https://img.shields.io/badge/Manifest-V3-success.svg?style=for-the-badge&logo=googlechrome&logoColor=white)](https://developer.chrome.com/docs/extensions/mv3/intro/)
 [![CI Status](https://img.shields.io/github/actions/workflow/status/nguyenquan27122005-cmd/docpress/ci.yml?branch=main&style=for-the-badge&logo=githubactions&logoColor=white)](https://github.com/nguyenquan27122005-cmd/docpress/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
@@ -25,8 +25,8 @@
 
 ---
 
-> [!WARNING]
-> **Runtime audit (2026-10-19):** Controlled documents export successfully, but the tested public Scribd and Studocu samples failed on image loading. Studocu pages without dimensions can also be cropped. The existing live smoke test can pass while the export button fails. See the [audit report and reproduction steps](https://github.com/nguyenquan27122005-cmd/docpress/blob/main/docs/AUDIT-2026-10-19.md) before relying on the current release.
+> [!NOTE]
+> **1.2.1 fixes:** Public CDN image loading, missing page dimensions, Scribd sprite clipping/viewer zoom, and malformed bridge messages are covered by actual-extension regression tests. The live test now clicks the export button and checks the downloaded PDF. Scribd's public sample was verified visually; Studocu returned HTTP 403 (Access Blocked), so a live export could not be verified. See the [audit and remediation notes](https://github.com/nguyenquan27122005-cmd/docpress/blob/main/docs/AUDIT-2026-10-19.md).
 
 ## 🌟 Overview
 
@@ -161,15 +161,27 @@ npm test
 node test.mjs
 ```
 
-### Run Provider Parsing Smoke Tests
+### Run Actual-Extension Browser Tests
+
+These tests use Python 3.10+ and Playwright Chromium. Install the optional test dependencies once:
+
 ```bash
-# Opens an isolated Chrome instance to test real providers
+python -m pip install -r audits/2026-10-19/requirements.txt
+python -m playwright install chromium
+npm run test:browser
+```
+
+The controlled tests verify downloaded PDF content, page bounds, sprite clipping, error cleanup, cancellation, and extension messaging. CI runs them alongside the fast Node tests.
+
+### Run Live Download Smoke Tests
+```bash
+# Loads the actual extension in a fresh Chromium profile
 npm run test:real
 # or
 node real-test.mjs
 ```
 
-This script injects page scripts and uses a separate PDF probe. It does not load the complete extension or click its export button. For actual-extension checks and known failures, see the [runtime audit](https://github.com/nguyenquan27122005-cmd/docpress/blob/main/docs/AUDIT-2026-10-19.md).
+This test clicks the real export button for visible page 1 and validates the downloaded PDF. Unavailable provider data, navigation blocks, export errors, and missing downloads fail the test. It saves PDF/PNG evidence in a fresh temporary directory; inspect the PNG for live visual completeness. Use `npm run test:real -- --headed` for a visible browser, or set `PYTHON` to your Python executable. See the [audit notes](https://github.com/nguyenquan27122005-cmd/docpress/blob/main/docs/AUDIT-2026-10-19.md) for coverage limits.
 
 ---
 
@@ -189,7 +201,7 @@ docpress/
 ├── popup.html                 # Extension toolbar action popup UI
 ├── popup.js                   # Popup toggle event handling
 ├── test.mjs                   # Fast unit test suite (100+ assertions)
-├── real-test.mjs              # Headless/live Chrome provider validation
+├── real-test.mjs              # Actual-extension live download smoke test
 ├── package.json               # Project manifest & npm scripts
 ├── LICENSE                    # MIT License
 └── README.md                  # Project documentation

@@ -12,9 +12,13 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 
 parser = argparse.ArgumentParser(description='Reproduce the 2026-10-19 browser audit on controlled fixtures.')
 parser.add_argument('--source', type=Path, default=Path(__file__).resolve().parents[2])
-SOURCE = parser.parse_args().source.resolve()
+parser.add_argument('--expect-baseline-bugs', action='store_true')
+parser.add_argument('--live', action='store_true', help='Export visible page 1 on the public samples with the actual extension.')
+parser.add_argument('--headed', action='store_true', help='Show the isolated Chromium window for live checks.')
+args = parser.parse_args()
+SOURCE = args.source.resolve()
 HERE = Path(tempfile.mkdtemp(prefix='docpress-audit-fixtures-'))
-print('Evidence directory:', HERE)
+print('Evidence directory:', HERE, flush=True)
 if not (SOURCE / 'manifest.json').is_file():
     raise SystemExit('Extension manifest not found; pass --source with the repository root.')
 RESULT = {'cases': [], 'console': [], 'pageErrors': [], 'requests': []}
@@ -43,6 +47,9 @@ def fixture(provider, kind):
     if kind == 'jsonp':
         script = 'window.docManager={pages:{1:{pageNum:1,origWidth:300,origHeight:400,contentUrl:"https://html.scribdassets.com/audit/pages/1-audit.jsonp"}}};'
         body = '<h2>Controlled Scribd JSONP fixture</h2>'
+    elif kind == 'clipped-image':
+        body = '<div id="p1" style="width:450px;height:600px"><div class="newpage" style="position:relative;width:300px;height:400px;transform:scale(1.5);transform-origin:top left;background:#ffe0a0"><img src="' + DATA + '" style="position:absolute;left:20px;top:20px;width:80px;height:60px;clip:rect(10px,50px,40px,20px)"><div style="position:absolute;left:270px;top:370px;width:20px;height:20px;background:#00ff00"></div></div></div>'
+        script = 'window.docManager={pages:{1:{pageNum:1,origWidth:300,origHeight:400,innerPageElem:document.querySelector("#p1"),containerElem:document.querySelector("#p1")}}};'
     else:
         src = 'https://html.scribdassets.com/audit-wildcard.png' if kind == 'wildcard-image' else DATA
         body = '<div id="p1">' + markup(1, src) + '</div><div id="p2">' + markup(2, src) + '</div>'
@@ -66,7 +73,7 @@ def save_pdf(download, label):
     return info
 
 with sync_playwright() as p:
-    context = p.chromium.launch_persistent_context(str(HERE / 'chromium-extension-profile'), channel='chromium', headless=True, accept_downloads=True, args=[f'--disable-extensions-except={SOURCE}', f'--load-extension={SOURCE}', '--disable-background-timer-throttling', '--disable-renderer-backgrounding'])
+    context = p.chromium.launch_persistent_context(str(HERE / 'chromium-extension-profile'), channel='chromium', headless=not args.headed, accept_downloads=True, args=[f'--disable-extensions-except={SOURCE}', f'--load-extension={SOURCE}', '--disable-background-timer-throttling', '--disable-renderer-backgrounding'])
     try:
         RESULT['browser'] = context.browser.version
         worker = context.service_workers[0] if context.service_workers else context.wait_for_event('serviceworker', timeout=15000)
@@ -74,6 +81,48 @@ with sync_playwright() as p:
         RESULT['extensionVersion'] = worker.evaluate('chrome.runtime.getManifest().version')
         worker.evaluate('chrome.storage.local.set({unblurEnabled:false})')
         extension_id = worker.url.split('/')[2]
+        if args.live:
+            # Use the real installed extension and actual browser download event.
+            # Visit only public samples, signed out, with cookie removal disabled.
+            targets = [
+                ('scribd', 'https://www.scribd.com/document/1055407232/CV-Factory-Manager'),
+                ('studocu', 'https://www.studocu.vn/vn/document/truong-dai-hoc-su-pham-thanh-pho-ho-chi-minh/nhap-udcntt/tai-lieu-mau-studocu-huong-dan-tai-len-va-chia-se/148501618'),
+            ]
+            page = context.new_page()
+            failures = []
+            for provider, url in targets:
+                try:
+                    response = page.goto(url, wait_until='domcontentloaded', timeout=60000)
+                    if response and response.status >= 400:
+                        raise RuntimeError('Provider returned HTTP ' + str(response.status))
+                    page.locator('#doc2pdf-start').wait_for(timeout=30000)
+                    ready = ('() => window.__NEXT_DATA__?.props?.pageProps?.pageDataList?.length > 0'
+                             if provider == 'studocu' else '() => Object.values(window.docManager?.pages || {}).some(Boolean)')
+                    deadline = time.monotonic() + 30
+                    while not page.evaluate(ready):
+                        if time.monotonic() >= deadline:
+                            raise RuntimeError('Public document data unavailable; page may be blocked or still loading')
+                        page.wait_for_timeout(250)
+                    page.locator('#doc2pdf-from').fill('1')
+                    page.locator('#doc2pdf-to').fill('1')
+                    with page.expect_download(timeout=45000) as pending:
+                        page.locator('#doc2pdf-start').click()
+                    target = HERE / (provider + '-live.pdf')
+                    pending.value.save_as(target)
+                    with fitz.open(target) as pdf:
+                        assert len(pdf) == 1 and pdf[0].get_images(), 'Missing exported PDF page/image'
+                        pdf[0].get_pixmap().save(HERE / (provider + '-live.png'))
+                    print('PASS download', provider, target.stat().st_size, 'bytes; inspect rendered PNG for visual completeness', flush=True)
+                except Exception as error:
+                    failures.append(provider)
+                    print('FAIL', provider, str(error))
+                    try:
+                        print('Export status:', page.locator('#doc2pdf-status').inner_text(timeout=1000))
+                    except Exception:
+                        pass
+            if failures:
+                raise SystemExit('Live export did not pass: ' + ', '.join(failures) + '. Provider navigation blocks also count as failures.')
+            raise SystemExit(0)
         popup = context.new_page()
         popup.goto(f'chrome-extension://{extension_id}/popup.html')
         popup.locator('#unblur').wait_for()
@@ -152,10 +201,16 @@ with sync_playwright() as p:
         capture('studocu', 'inline', 'studocu-range-2', 2, 2)
         capture('scribd', 'dom', 'scribd-dom')
         capture('scribd', 'jsonp', 'scribd-jsonp-bridge')
+        if not args.expect_baseline_bugs:
+            capture('scribd', 'wildcard-image', 'scribd-wildcard-image')
+            capture('scribd', 'clipped-image', 'scribd-clipped-image')
         RESULT['workerFixtureFetches'] = worker.evaluate('globalThis.__auditWorkerFetches')
         RESULT['workerNetworkFixture'] = 'worker fetch stub returns controlled JSONP; actual extension relay and response reader execute'
 
-        for provider, kind in [('studocu', 'missing'), ('studocu', 'broken-image'), ('scribd', 'wildcard-image')]:
+        errors = [('studocu', 'missing'), ('studocu', 'broken-image')]
+        if args.expect_baseline_bugs:
+            errors.append(('scribd', 'wildcard-image'))
+        for provider, kind in errors:
             navigate(provider, kind)
             downloads = []
             on_download = lambda download: downloads.append(download)
@@ -186,13 +241,25 @@ with sync_playwright() as p:
             for pixels, expected in zip(by_name[name]['pdf']['samplePixels'], expected_colors):
                 assert all(abs(a - b) <= 3 for a, b in zip(pixels['background'], expected)), name + ': wrong page content/order'
                 assert all(abs(a - b) <= 3 for a, b in zip(pixels['image'], (220, 30, 200))), name + ': image marker missing'
+        if not args.expect_baseline_bugs:
+            assert by_name['scribd-wildcard-image'].get('pdf', {}).get('pages') == 2, 'Public wildcard-CORS image export failed'
+            for pixels in by_name['scribd-wildcard-image']['pdf']['samplePixels']:
+                assert all(abs(a - b) <= 3 for a, b in zip(pixels['image'], (220, 30, 200))), 'Public CDN image missing from PDF'
+            with fitz.open(HERE / 'scribd-clipped-image.pdf') as clipped:
+                pix = clipped[0].get_pixmap(matrix=fitz.Matrix(96 / 72, 96 / 72))
+                assert all(abs(a - b) <= 3 for a, b in zip(pix.pixel(45, 35), (220, 30, 200))), 'Clipped image fragment missing'
+                assert all(abs(a - b) <= 3 for a, b in zip(pix.pixel(25, 25), (255, 224, 160))), 'Sprite pixels outside CSS clip leaked into PDF'
+                assert all(abs(a - b) <= 3 for a, b in zip(pix.pixel(280, 380), (0, 255, 0))), 'Scribd viewer zoom cropped the bottom-right marker'
         assert len(RESULT['workerFixtureFetches']) == 1, 'Expected the real worker message path to execute once'
         assert RESULT['popupPersistenceOn'] and RESULT['popupPersistenceOff'], 'Popup setting did not persist'
-        for name in ['studocu-missing', 'studocu-broken-image', 'scribd-wildcard-image']:
+        for name in [provider + '-' + kind for provider, kind in errors]:
             case = by_name[name]
             assert case['downloads'] == 0 and case['controlsRestored'] and case['stageRemoved'], name
         assert by_name['spa-widget']['removedOnSearch'] and by_name['spa-widget']['restoredOnDocument']
-        assert any('event.data' in error for error in RESULT['pageErrors']), 'Expected baseline null-message exception'
+        if args.expect_baseline_bugs:
+            assert any('event.data' in error for error in RESULT['pageErrors']), 'Expected baseline null-message exception'
+        else:
+            assert not RESULT['pageErrors'], RESULT['pageErrors']
         RESULT['live'] = []
         (HERE / 'runtime-results.json').write_text(json.dumps(RESULT, indent=2, ensure_ascii=False), encoding='utf-8')
         print(json.dumps({'browser': RESULT['browser'], 'serviceWorker': RESULT['serviceWorker'], 'cases': RESULT['cases'], 'live': RESULT['live'], 'pageErrors': RESULT['pageErrors']}, indent=2, ensure_ascii=False))

@@ -1,11 +1,12 @@
 {
   "name": "docpress",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Fast & lightweight Chromium extension to export Studocu and Scribd documents to PDF",
   "type": "module",
   "scripts": {
     "test": "node test.mjs",
-    "test:real": "node real-test.mjs"
+    "test:real": "node real-test.mjs",
+    "test:browser": "python -X utf8 audits/2026-10-19/browser_fixtures.py && python -X utf8 audits/2026-10-19/edge_cases.py"
   },
   "keywords": [
     "chrome-extension",

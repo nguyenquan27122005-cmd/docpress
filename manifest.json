@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "DocPress",
   "description": "Xuất tài liệu Studocu/Scribd ra PDF (chụp nội dung trang đang xem). Dùng cho mục đích học tập cá nhân.",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "permissions": ["cookies", "storage"],
   "action": {
     "default_title": "DocPress",
